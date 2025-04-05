@@ -33,7 +33,7 @@ String bp_model = "OMRON-HBP9030"; // 預設型號
 BP_Parser bpParser("OMRON-HBP9030");
 
 // 建立血壓記錄管理器
-BP_RecordManager recordManager(10); // 保存最近10筆記錄
+BP_RecordManager recordManager(50); // 保存最近50筆記錄（原為10筆）
 
 bool rs232_active = false;
 unsigned long lastRs232Activity = 0;
@@ -76,8 +76,11 @@ void setup() {
 
   pinMode(RESET_PIN, INPUT_PULLUP);
   
-  // 設置NTP時間同步
+  // 設置NTP時間同步，使用台北時區（GMT+8）
   configTime(8 * 3600, 0, "pool.ntp.org", "time.nist.gov");
+  // 設置台北時區
+  setenv("TZ", "CST-8", 1);
+  tzset();
 }
 
 void startAPMode() {
@@ -566,6 +569,18 @@ void loop() {
     
     // 如果數據有效，添加到歷史記錄
     if (parsedData.valid) {
+      // 獲取當前時間並格式化為台北時間
+      struct tm timeinfo;
+      if(getLocalTime(&timeinfo)) {
+        char timeStr[64];
+        // 格式化為 2025-04-05 15:30:45 格式
+        strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", &timeinfo);
+        parsedData.timestamp = String(timeStr);
+      } else {
+        // 如果無法獲取時間，使用簡單時間戳
+        parsedData.timestamp = String("時間未同步");
+      }
+      
       recordManager.addRecord(parsedData);
     }
     
