@@ -8,9 +8,9 @@
 #define TX_PIN 17  // UART2 TX 引腳
 
 // AP模式設定
-const char* ap_ssid = "ESP32_BP_Setup";
+const char* ap_ssid = "ESP32_BP_checker";
 const char* ap_password = "12345678";
-const char* hostname = "esp32bp"; // mDNS主機名
+const char* hostname = "bp_checker"; // mDNS主機名
 
 // WiFi設定
 String sta_ssid = "";
@@ -155,8 +155,8 @@ void connectToWiFi() {
     
     server.begin();
     
-    Serial.println("\n\n===== ESP32-S3 血壓機 WiFi 轉發器 =====");
-    Serial.println("設備名稱: ESP32S3_BP_Monitor");
+    Serial.println("\n\n===== ESP32 血壓機 WiFi 轉發器 =====");
+    Serial.println("設備名稱: ESP32_BP_Monitor");
     Serial.println("與電腦通訊: 115200 bps");
     Serial.println("與血壓機通訊: 9600 bps (RX:" + String(RX_PIN) + ", TX:" + String(TX_PIN) + ")");
     Serial.print("WiFi IP 地址: ");
@@ -169,7 +169,7 @@ void connectToWiFi() {
 }
 
 void handleRoot() {
-  String html = "<html><head><meta charset='UTF-8'><title>ESP32-S3 血壓機WiFi設定</title>";
+  String html = "<html><head><meta charset='UTF-8'><title>血壓機WiFi設定</title>";
   html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
   html += "<style>body{font-family:Arial;margin:20px;} ";
   html += ".form-box{background:#f0f0f0;border:1px solid #ddd;padding:20px;border-radius:5px;max-width:400px;margin:0 auto;}";
@@ -178,7 +178,7 @@ void handleRoot() {
   html += ".info{background:#e8f4f8;padding:10px;border-radius:5px;margin-top:15px;font-size:14px;}";
   html += "</style></head><body>";
   html += "<div class='form-box'>";
-  html += "<h2>ESP32-S3 血壓機WiFi設定</h2>";
+  html += "<h2>血壓機WiFi設定</h2>";
   html += "<form method='post' action='/configure'>";
   html += "WiFi名稱:<br><input type='text' name='ssid' placeholder='輸入WiFi名稱'><br>";
   html += "WiFi密碼:<br><input type='password' name='password' placeholder='輸入WiFi密碼'><br><br>";
@@ -233,7 +233,7 @@ void handleConfigure() {
 
 void handleMonitor() {
   String html = "<html><head><meta charset='UTF-8'>";
-  html += "<title>ESP32-S3 血壓機監控</title>";
+  html += "<title>血壓機監控</title>";
   html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
   html += "<meta http-equiv='refresh' content='3'>"; // 每3秒自動刷新
   html += "<style>body{font-family:Arial;margin:20px;}";
@@ -242,7 +242,7 @@ void handleMonitor() {
   html += ".config-btn{background:#007bff;color:white;padding:8px 12px;border:none;border-radius:4px;text-decoration:none;}";
   html += ".info{font-size:12px;color:#666;margin-top:15px;}";
   html += "</style></head><body>";
-  html += "<div class='header'><h1>ESP32-S3 血壓機數據監控</h1>";
+  html += "<div class='header'><h1>血壓機數據監控</h1>";
   html += "<a href='/config' class='config-btn'>WiFi設定</a></div>";
   html += "<div class='data-box'><h2>血壓數據:</h2><div id='data'>";
   html += (lastData == "") ? "等待數據..." : lastData;
@@ -251,7 +251,7 @@ void handleMonitor() {
   html += "<div class='info'>";
   html += "<p>連接信息:</p>";
   html += "<ul>";
-  html += "<li>設備名稱: ESP32S3_BP_Monitor</li>";
+  html += "<li>設備名稱: BP_checker</li>";
   html += "<li>IP地址: " + WiFi.localIP().toString() + "</li>";
   html += "<li>可通過 <strong>http://" + String(hostname) + ".local</strong> 訪問</li>";
   html += "<li>AP熱點: " + String(ap_ssid) + " (密碼: " + String(ap_password) + ")</li>";
