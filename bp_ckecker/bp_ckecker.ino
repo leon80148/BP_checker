@@ -33,7 +33,7 @@ String bp_model = "OMRON-HBP9030"; // 預設型號
 BP_Parser bpParser("OMRON-HBP9030");
 
 // 建立血壓記錄管理器
-BP_RecordManager recordManager(50); // 保存最近50筆記錄（原為10筆）
+BP_RecordManager recordManager(20); // 保存最近20筆記錄
 
 bool rs232_active = false;
 unsigned long lastRs232Activity = 0;
@@ -126,6 +126,8 @@ void startAPMode() {
   server.on("/history", HTTP_GET, handleHistory);
   server.on("/api/history", HTTP_GET, handleHistoryAPI);
   server.on("/clear_history", HTTP_GET, handleClearHistory);
+  
+  server.on("/raw_data", HTTP_GET, handleRawData);
   
   server.begin();
   Serial.println("HTTP伺服器已啟動");
@@ -460,7 +462,7 @@ void handleHistory() {
   html += "</div></div>";
   
   html += "<table>";
-  html += "<tr><th>測量時間</th><th>收縮壓 (mmHg)</th><th>舒張壓 (mmHg)</th><th>脈搏 (bpm)</th></tr>";
+  html += "<tr><th>測量時間</th><th>收縮壓 (mmHg)</th><th>舒張壓 (mmHg)</th><th>脈搏 (bpm)</th><th>原始數據</th></tr>";
   
   // 顯示歷史記錄
   int recordCount = recordManager.getRecordCount();
@@ -482,6 +484,8 @@ void handleHistory() {
       // 脈搏
       String pulseClass = (record.pulse > 100 || record.pulse < 60) ? "abnormal" : "normal";
       html += "<td class='" + pulseClass + "'>" + String(record.pulse) + "</td>";
+      
+      html += "<td><a href=\"/raw_data?id=" + String(i) + "\" class=\"data-link\">查看原始數據</a></td>";
       
       html += "</tr>";
     }
@@ -532,6 +536,21 @@ void handleClearHistory() {
   html += "</div></body></html>";
   
   server.send(200, "text/html", html);
+}
+
+void handleRawData() {
+  // 實現原始數據顯示功能
+  String id = server.arg("id");
+  if (id.length() > 0) {
+    BPData record = recordManager.getRecord(id.toInt());
+    if (record.valid) {
+      server.send(200, "text/plain", record.rawData);
+    } else {
+      server.send(404, "text/plain", "找不到該記錄");
+    }
+  } else {
+    server.send(400, "text/plain", "缺少記錄ID");
+  }
 }
 
 void loop() {
