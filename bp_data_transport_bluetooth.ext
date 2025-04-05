@@ -1,0 +1,172 @@
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
+#include "esp_bt_main.h"
+#include "esp_bt_device.h"
+#include "esp_gap_bt_api.h"
+
+// 定義藍牙 UUID
+#define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
+#define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+
+// ESP32-S3 的 UART2 引腳定義
+#define RX_PIN 16  // UART2 RX 引腳
+#define TX_PIN 17  // UART2 TX 引腳
+
+BLEServer* pServer = NULL;
+BLECharacteristic* pCharacteristic = NULL;
+bool deviceConnected = false;
+bool oldDeviceConnected = false;
+uint8_t connectionAttempts = 0;
+
+// 在loop()函式中增加RS232狀態檢測
+bool rs232_active = false;
+unsigned long lastRs232Activity = 0;
+
+class MyServerCallbacks: public BLEServerCallbacks {
+    void onConnect(BLEServer* pServer) {
+      deviceConnected = true;
+      connectionAttempts = 0;
+      Serial.println("設備已連接");
+    };
+
+    void onDisconnect(BLEServer* pServer) {
+      deviceConnected = false;
+      Serial.println("設備已斷開");
+    }
+};
+
+void setup() {
+  // 初始化串列埠監視器
+  Serial.begin(115200);
+  delay(1000); // 等待串列埠穩定
+  
+  // 初始化 UART2 用於與血壓機通訊
+  Serial2.begin(9600, SERIAL_8N1, RX_PIN, TX_PIN);
+  
+  // 初始化藍牙
+  btStart(); // 確保藍牙控制器已啟動
+  delay(1000);
+  esp_err_t ret = esp_bluedroid_init();
+  if (ret != ESP_OK) {
+    Serial.println("藍牙初始化失敗");
+    return;
+  }
+  
+  ret = esp_bluedroid_enable();
+  if (ret != ESP_OK) {
+    Serial.println("藍牙啟用失敗");
+    return;
+  }
+  
+  delay(500);
+  
+  // 初始化藍牙前先設定安全參數
+  BLEDevice::init("ESP32S3_BP_Monitor");
+  delay(500);
+  
+  // 關閉或簡化安全設定
+  BLESecurity *pSecurity = new BLESecurity();
+  pSecurity->setAuthenticationMode(ESP_LE_AUTH_NO_BOND);
+  pSecurity->setCapability(ESP_IO_CAP_NONE);
+  pSecurity->setInitEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
+  
+  // 創建 BLE 服務器
+  pServer = BLEDevice::createServer();
+  pServer->setCallbacks(new MyServerCallbacks());
+  
+  // 創建 BLE 服務
+  BLEService *pService = pServer->createService(SERVICE_UUID);
+  
+  // 創建 BLE 特徵
+  pCharacteristic = pService->createCharacteristic(
+                      CHARACTERISTIC_UUID,
+                      BLECharacteristic::PROPERTY_READ |
+                      BLECharacteristic::PROPERTY_NOTIFY
+                    );
+  
+  // 添加描述符
+  pCharacteristic->addDescriptor(new BLE2902());
+  
+  // 啟動服務
+  pService->start();
+  
+  // 設置更穩定的廣播參數
+  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(SERVICE_UUID);
+  pAdvertising->setScanResponse(false);
+  pAdvertising->setMinInterval(0x20); // 最小廣播間隔
+  pAdvertising->setMaxInterval(0x40); // 最大廣播間隔
+  pAdvertising->setMinPreferred(0x06);
+  pAdvertising->setMaxPreferred(0x12);
+  BLEDevice::startAdvertising();
+  
+  Serial.println("\n\n===== ESP32-S3 血壓機 BLE 轉發器 =====");
+  Serial.println("設備名稱: ESP32S3_BP_Monitor");
+  Serial.println("與電腦通訊: 115200 bps");
+  Serial.println("與血壓機通訊: 9600 bps (RX:" + String(RX_PIN) + ", TX:" + String(TX_PIN) + ")");
+  Serial.println("等待數據中...");
+}
+
+void loop() {
+  // 檢測RS232活動
+  if (Serial2.available()) {
+    lastRs232Activity = millis();
+    rs232_active = true;
+  }
+  
+  // 如果RS232長時間無活動，設為非活動狀態
+  if (rs232_active && (millis() - lastRs232Activity > 5000)) {
+    rs232_active = false;
+    Serial.println("RS232未檢測到活動");
+  }
+  
+  // 原有的重連邏輯
+  if (!deviceConnected && oldDeviceConnected) {
+    delay(500);
+    
+    // 只有在RS232活動狀態下才嘗試重連藍牙
+    if (rs232_active || connectionAttempts < 2) {
+      pServer->startAdvertising();
+      Serial.println("開始廣播");
+      connectionAttempts++;
+    }
+    
+    oldDeviceConnected = deviceConnected;
+  }
+  
+  if (deviceConnected && !oldDeviceConnected) {
+    oldDeviceConnected = deviceConnected;
+  }
+  
+  // 檢查是否有來自血壓機的數據
+  if (Serial2.available()) {
+    uint8_t buffer[100];
+    int byteCount = 0;
+    
+    while (Serial2.available() && byteCount < 100) {
+      buffer[byteCount] = Serial2.read();
+      byteCount++;
+      delay(2);
+    }
+    
+    Serial.print("接收數據: ");
+    for(int i=0; i<byteCount; i++) {
+      if(buffer[i] < 0x10) Serial.print("0");
+      Serial.print(buffer[i], HEX);
+      Serial.print(" ");
+    }
+    Serial.println();
+    
+    if (deviceConnected && byteCount > 0) {
+      pCharacteristic->setValue(buffer, byteCount);
+      pCharacteristic->notify();
+      Serial.println("數據已通過 BLE 發送");
+    }
+    
+    Serial.println("----------------------------------");
+  }
+  
+  delay(100);
+}
