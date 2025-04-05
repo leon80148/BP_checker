@@ -299,11 +299,11 @@ void handleBpModelPage() {
   html += "<form method='post' action='/set_bp_model'>";
   html += "選擇血壓機型號:<br>";
   html += "<select name='model'>";
-  html += "<option value='OMRON-HBP9030'" + (bp_model == "OMRON-HBP9030" ? " selected" : "") + ">OMRON HBP-9030</option>";
-  html += "<option value='OMRON-HBP1300'" + (bp_model == "OMRON-HBP1300" ? " selected" : "") + ">OMRON HBP-1300</option>";
-  html += "<option value='OMRON-HEM7121'" + (bp_model == "OMRON-HEM7121" ? " selected" : "") + ">OMRON HEM-7121</option>";
-  html += "<option value='TERUMO-ES-P2020'" + (bp_model == "TERUMO-ES-P2020" ? " selected" : "") + ">TERUMO ES-P2020</option>";
-  html += "<option value='CUSTOM'" + (bp_model == "CUSTOM" ? " selected" : "") + ">自定義格式</option>";
+  html += String("<option value='OMRON-HBP9030'") + (bp_model == "OMRON-HBP9030" ? " selected" : "") + ">OMRON HBP-9030</option>";
+  html += String("<option value='OMRON-HBP1300'") + (bp_model == "OMRON-HBP1300" ? " selected" : "") + ">OMRON HBP-1300</option>";
+  html += String("<option value='OMRON-HEM7121'") + (bp_model == "OMRON-HEM7121" ? " selected" : "") + ">OMRON HEM-7121</option>";
+  html += String("<option value='TERUMO-ES-P2020'") + (bp_model == "TERUMO-ES-P2020" ? " selected" : "") + ">TERUMO ES-P2020</option>";
+  html += String("<option value='CUSTOM'") + (bp_model == "CUSTOM" ? " selected" : "") + ">自定義格式</option>";
   html += "</select><br>";
   html += "<button type='submit'>儲存設定</button>";
   html += "</form>";

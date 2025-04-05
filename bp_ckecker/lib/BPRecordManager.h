@@ -101,7 +101,7 @@ public:
     
     for (int i = 0; i < _recordCount; i++) {
       String key = "rec_" + String(i);
-      String recData = _preferences.getString(key, "");
+      String recData = _preferences.getString(key.c_str(), "");
       
       if (recData.length() > 0) {
         // 解析記錄格式: timestamp|systolic|diastolic|pulse
@@ -145,7 +145,7 @@ public:
                        String(record.pulse);
       
       String key = "rec_" + String(i);
-      _preferences.putString(key, recData);
+      _preferences.putString(key.c_str(), recData);
     }
     
     _preferences.end();
