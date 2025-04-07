@@ -7,9 +7,9 @@
 #include "lib/BP_Parser.h"        // 引入血壓機解析器庫
 #include "lib/BPRecordManager.h"  // 引入血壓記錄管理器庫
 
-// ESP32-S3 的 UART2 引腳定義
-#define RX_PIN 16  // UART2 RX 引腳
-#define TX_PIN 17  // UART2 TX 引腳
+// USB接口的引腳定義
+#define USB_DP_PIN 20  // USB D+ 引腳
+#define USB_DN_PIN 19  // USB D- 引腳
 
 // AP模式設定
 const char* ap_ssid = "ESP32_BP_checker";
@@ -47,8 +47,8 @@ void setup() {
   Serial.begin(115200);
   delay(1000); // 等待串列埠穩定
   
-  // 初始化 UART2 用於與血壓機通訊
-  Serial2.begin(9600, SERIAL_8N1, RX_PIN, TX_PIN);
+  // 初始化 USB 用於與血壓機通訊
+  Serial2.begin(9600, SERIAL_8N1, USB_DN_PIN, USB_DP_PIN);
   
   // 從非易失性記憶體讀取WiFi設定
   preferences.begin("wifi-config", false);
@@ -208,7 +208,7 @@ void connectToWiFi() {
     Serial.println("設備名稱: ESP32_BP_Monitor");
     Serial.println("血壓機型號: " + bp_model);
     Serial.println("與電腦通訊: 115200 bps");
-    Serial.println("與血壓機通訊: 9600 bps (RX:" + String(RX_PIN) + ", TX:" + String(TX_PIN) + ")");
+    Serial.println("與血壓機通訊: 9600 bps (RX:" + String(USB_DN_PIN) + ", TX:" + String(USB_DP_PIN) + ")");
     Serial.print("WiFi IP 地址: ");
     Serial.println(WiFi.localIP());
     Serial.println("等待數據中...");
