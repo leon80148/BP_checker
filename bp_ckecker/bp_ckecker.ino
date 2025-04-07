@@ -35,8 +35,8 @@ BP_Parser bpParser("OMRON-HBP9030");
 // 建立血壓記錄管理器
 BP_RecordManager recordManager(20); // 保存最近20筆記錄
 
-bool rs232_active = false;
-unsigned long lastRs232Activity = 0;
+bool usb_active = false;
+unsigned long lastUsbActivity = 0;
 String lastData = "";
 bool apMode = false;
 
@@ -557,10 +557,10 @@ void loop() {
   // 處理Web伺服器事件
   server.handleClient();
   
-  // 檢測RS232活動
+  // 檢測USB通訊活動
   if (Serial2.available()) {
-    lastRs232Activity = millis();
-    rs232_active = true;
+    lastUsbActivity = millis();
+    usb_active = true;
     
     // 讀取數據
     uint8_t buffer[100];
@@ -623,10 +623,10 @@ void loop() {
     Serial.println("----------------------------------");
   }
   
-  // 如果RS232長時間無活動，設為非活動狀態
-  if (rs232_active && (millis() - lastRs232Activity > 5000)) {
-    rs232_active = false;
-    Serial.println("RS232未檢測到活動");
+  // 如果USB通訊長時間無活動，設為非活動狀態
+  if (usb_active && (millis() - lastUsbActivity > 5000)) {
+    usb_active = false;
+    Serial.println("USB通訊未檢測到活動");
   }
   
   // 檢查重置按鈕
