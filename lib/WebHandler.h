@@ -184,10 +184,10 @@ public:
       html += "<div class='success-box'>";
       html += "<h2>WiFi設定已儲存</h2>";
       html += "<p>設備將重新啟動並嘗試連接到新的WiFi...</p>";
-      html += "<p>連接成功後可通過以下方式訪問:</p>";
+      html += "<p>連接成功後，您可以通過以下方式訪問設備：</p>";
       html += "<p><strong>http://" + String(*hostname) + ".local</strong></p>";
-      html += "<p>或通過" + String(*ap_ssid) + " WiFi熱點查看IP地址</p>";
-      html += "<p>若無法順利連結，請長按Reset鍵3秒重置設定</p>";
+      html += "<p>或是連接到「" + String(*ap_ssid) + "」WiFi熱點後查看裝置IP地址</p>";
+      html += "<p>若無法連接，請長按Reset鍵3秒進行重置</p>";
       html += "</div></body></html>";
       
       server->send(200, "text/html", html);
@@ -217,9 +217,6 @@ public:
     html += "選擇血壓機型號:<br>";
     html += "<select name='model'>";
     html += String("<option value='OMRON-HBP9030'") + (*bp_model == "OMRON-HBP9030" ? " selected" : "") + ">OMRON HBP-9030</option>";
-    html += String("<option value='OMRON-HBP1300'") + (*bp_model == "OMRON-HBP1300" ? " selected" : "") + ">OMRON HBP-1300</option>";
-    html += String("<option value='OMRON-HEM7121'") + (*bp_model == "OMRON-HEM7121" ? " selected" : "") + ">OMRON HEM-7121</option>";
-    html += String("<option value='TERUMO-ES-P2020'") + (*bp_model == "TERUMO-ES-P2020" ? " selected" : "") + ">TERUMO ES-P2020</option>";
     html += String("<option value='CUSTOM'") + (*bp_model == "CUSTOM" ? " selected" : "") + ">自定義格式</option>";
     html += "</select><br>";
     html += "<button type='submit'>儲存設定</button>";
@@ -285,6 +282,10 @@ public:
     html += ".pulse{background:#e3f2fd;}";
     html += ".abnormal{color:red;}";
     html += ".normal{color:green;}";
+    html += "table{width:100%;border-collapse:collapse;margin:10px 0;}";
+    html += "th,td{border:1px solid #ddd;padding:8px;text-align:center;}";
+    html += "th{background-color:#f2f2f2;}";
+    html += "tr:nth-child(even){background-color:#f9f9f9;}";
     html += "</style></head><body>";
     html += "<div class='header'><h1>血壓機數據監控</h1>";
     html += "<div><a href='/config' class='config-btn'>WiFi設定</a> ";
@@ -321,6 +322,39 @@ public:
       html += "</div>";
       
       html += "</div></div>";
+      
+      // 最近5筆數據表格區塊
+      html += "<div class='data-box'>";
+      html += "<h2>最近5筆血壓數據:</h2>";
+      html += "<table>";
+      html += "<tr><th>測量時間</th><th>收縮壓 (mmHg)</th><th>舒張壓 (mmHg)</th><th>脈搏 (bpm)</th></tr>";
+      
+      // 獲取最近5筆記錄
+      int recordCount = recordManager->getRecordCount();
+      int displayCount = min(5, recordCount); // 最多顯示5筆
+      
+      for (int i = 0; i < displayCount; i++) {
+        BPData record = recordManager->getRecord(i);
+        
+        html += "<tr>";
+        html += "<td>" + record.timestamp + "</td>";
+        
+        // 收縮壓
+        String systolicClass = (record.systolic > 130 || record.systolic < 90) ? "abnormal" : "normal";
+        html += "<td class='" + systolicClass + "'>" + String(record.systolic) + "</td>";
+        
+        // 舒張壓
+        String diastolicClass = (record.diastolic > 80 || record.diastolic < 50) ? "abnormal" : "normal";
+        html += "<td class='" + diastolicClass + "'>" + String(record.diastolic) + "</td>";
+        
+        // 脈搏
+        String pulseClass = (record.pulse > 100 || record.pulse < 60) ? "abnormal" : "normal";
+        html += "<td class='" + pulseClass + "'>" + String(record.pulse) + "</td>";
+        
+        html += "</tr>";
+      }
+      
+      html += "</table></div>";
     }
     
     // 原始數據顯示區
