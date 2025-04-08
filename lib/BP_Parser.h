@@ -78,24 +78,35 @@ private:
     result.diastolic = -1;
     result.pulse = -1;
     
-    // OMRON HBP-9030 數據格式
-    // 02 xx xx systolic_H systolic_L diastolic_H diastolic_L pulse_H pulse_L ...
-    // 判斷是否是有效的數據包
-    if (length >= 12 && buffer[0] == 0x02) {
-      // 收縮壓在第4-5位元
-      if (length >= 5) {
-        result.systolic = buffer[3] * 256 + buffer[4];
+    // 將數據轉換為字串並以逗號分割
+    String dataStr = "";
+    for(int i = 0; i < length; i++) {
+      dataStr += (char)buffer[i];
+    }
+    
+    // 分割字串
+    int values[10] = {0}; // 用於存儲分割後的數值
+    int valueIndex = 0;
+    int startPos = 0;
+    
+    // 解析逗號分隔的數據
+    for(int i = 0; i < dataStr.length(); i++) {
+      if(dataStr.charAt(i) == ',' || i == dataStr.length() - 1) {
+        String value = dataStr.substring(startPos, i);
+        value.trim();
+        if(valueIndex < 10) {
+          values[valueIndex] = value.toInt();
+        }
+        valueIndex++;
+        startPos = i + 1;
       }
-      
-      // 舒張壓在第6-7位元
-      if (length >= 7) {
-        result.diastolic = buffer[5] * 256 + buffer[6];
-      }
-      
-      // 脈搏在第8-9位元
-      if (length >= 9) {
-        result.pulse = buffer[7] * 256 + buffer[8];
-      }
+    }
+    
+    // 根據Python程式的格式，收縮壓在第7位，舒張壓在第8位，脈搏在第9位
+    if(valueIndex >= 10) {
+      result.systolic = values[7];
+      result.diastolic = values[8];
+      result.pulse = values[9];
     }
     
     return result;
