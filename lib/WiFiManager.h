@@ -46,7 +46,7 @@ public:
   }
   
   bool hasCredentials() {
-    return (sta_ssid != "" && sta_password != "");
+    return sta_ssid != "";
   }
   
   void startAPMode() {
