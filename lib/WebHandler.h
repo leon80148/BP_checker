@@ -75,15 +75,19 @@ public:
     
     String html = "<html><head><meta charset='UTF-8'><title>血壓機WiFi設定</title>";
     html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
-    html += "<style>body{font-family:Arial;margin:20px;} ";
-    html += ".form-box{background:#f0f0f0;border:1px solid #ddd;padding:20px;border-radius:5px;max-width:400px;margin:0 auto;}";
-    html += "input, select{width:100%;padding:8px;margin:8px 0;box-sizing:border-box;}";
-    html += "button{background:#4CAF50;color:white;padding:10px;border:none;cursor:pointer;width:100%;}";
-    html += ".info{background:#e8f4f8;padding:10px;border-radius:5px;margin-top:15px;font-size:14px;}";
-    html += ".nav{margin-top:20px;text-align:center;}";
-    html += ".nav a{margin:0 10px;color:#007bff;text-decoration:none;}";
-    html += ".wifi-strength{font-size:12px;color:#666;}";
-    html += ".refresh-btn{background:#007bff;color:white;padding:5px 10px;border:none;border-radius:3px;text-decoration:none;font-size:12px;margin-left:10px;}";
+    html += "<style>body{font-family:'Segoe UI',Arial,sans-serif;margin:0;background:#f5f7fb;color:#1f2a44;} ";
+    html += ".page{max-width:520px;margin:0 auto;padding:24px 16px 40px;} ";
+    html += ".form-box{background:#fff;border:1px solid #e3e8f0;padding:24px;border-radius:12px;box-shadow:0 10px 20px rgba(31,42,68,0.08);} ";
+    html += "h2{margin:0 0 16px;font-size:22px;} ";
+    html += "label{display:block;font-weight:600;margin-top:12px;} ";
+    html += "input, select{width:100%;padding:10px 12px;margin:8px 0 4px;border:1px solid #ccd5e0;border-radius:8px;box-sizing:border-box;font-size:15px;} ";
+    html += "button{background:#2563eb;color:white;padding:12px;border:none;border-radius:10px;cursor:pointer;width:100%;font-size:16px;font-weight:600;margin-top:12px;} ";
+    html += "button:hover{background:#1d4ed8;} ";
+    html += ".info{background:#eef6ff;padding:12px 14px;border-radius:8px;margin-top:18px;font-size:14px;border:1px solid #cfe3ff;} ";
+    html += ".nav{margin-top:22px;text-align:center;display:flex;justify-content:center;gap:12px;flex-wrap:wrap;} ";
+    html += ".nav a{color:#2563eb;text-decoration:none;font-weight:600;} ";
+    html += ".helper{font-size:12px;color:#6b7280;margin-bottom:8px;} ";
+    html += ".refresh-btn{background:#0ea5e9;color:white;padding:6px 12px;border:none;border-radius:999px;text-decoration:none;font-size:12px;margin-left:10px;} ";
     html += "</style>";
     
     // 添加JavaScript用於手動輸入SSID
@@ -102,12 +106,12 @@ public:
     html += "</script>";
     
     html += "</head><body>";
-    html += "<div class='form-box'>";
+    html += "<div class='page'><div class='form-box'>";
     html += "<h2>血壓機WiFi設定</h2>";
     html += "<form method='post' action='/configure'>";
     
     // WiFi選擇下拉選單
-    html += "選擇WiFi網路:<br>";
+    html += "<label>選擇WiFi網路</label>";
     html += "<select id='wifi-select' name='ssid' onchange='toggleManualSSID()'>";
     
     if (n == 0) {
@@ -126,12 +130,13 @@ public:
     }
     
     html += "<option value='manual'>手動輸入...</option>";
-    html += "</select><br>";
+    html += "</select>";
+    html += "<div class='helper'>若列表找不到您的WiFi，請選擇「手動輸入...」。</div>";
     
     // 手動輸入SSID的輸入框（預設隱藏）
-    html += "<input type='text' id='manual-ssid' name='manual_ssid' placeholder='輸入WiFi名稱' style='display:none'><br>";
+    html += "<input type='text' id='manual-ssid' name='manual_ssid' placeholder='輸入WiFi名稱' style='display:none'>";
     
-    html += "WiFi密碼:<br><input type='password' name='password' placeholder='輸入WiFi密碼'><br><br>";
+    html += "<label>WiFi密碼</label><input type='password' name='password' placeholder='輸入WiFi密碼'>";
     html += "<button type='submit'>儲存並連接</button>";
     html += "</form>";
     
@@ -153,7 +158,7 @@ public:
     html += "<a href='/'>返回監控</a>";
     html += "</div>";
     
-    html += "</div></body></html>";
+    html += "</div></div></body></html>";
     
     server->send(200, "text/html", html);
   }
@@ -203,15 +208,18 @@ public:
   void handleBpModelPage() {
     String html = "<html><head><meta charset='UTF-8'><title>血壓機型號設定</title>";
     html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
-    html += "<style>body{font-family:Arial;margin:20px;} ";
-    html += ".form-box{background:#f0f0f0;border:1px solid #ddd;padding:20px;border-radius:5px;max-width:400px;margin:0 auto;}";
-    html += "select{width:100%;padding:8px;margin:8px 0;box-sizing:border-box;}";
-    html += "button{background:#4CAF50;color:white;padding:10px;border:none;cursor:pointer;width:100%;}";
-    html += ".info{background:#e8f4f8;padding:10px;border-radius:5px;margin-top:15px;font-size:14px;}";
-    html += ".nav{margin-top:20px;text-align:center;}";
-    html += ".nav a{margin:0 10px;color:#007bff;text-decoration:none;}";
+    html += "<style>body{font-family:'Segoe UI',Arial,sans-serif;margin:0;background:#f5f7fb;color:#1f2a44;} ";
+    html += ".page{max-width:520px;margin:0 auto;padding:24px 16px 40px;} ";
+    html += ".form-box{background:#fff;border:1px solid #e3e8f0;padding:24px;border-radius:12px;box-shadow:0 10px 20px rgba(31,42,68,0.08);} ";
+    html += "h2{margin:0 0 16px;font-size:22px;} ";
+    html += "select{width:100%;padding:10px 12px;margin:8px 0 4px;border:1px solid #ccd5e0;border-radius:8px;box-sizing:border-box;font-size:15px;} ";
+    html += "button{background:#2563eb;color:white;padding:12px;border:none;border-radius:10px;cursor:pointer;width:100%;font-size:16px;font-weight:600;margin-top:12px;} ";
+    html += "button:hover{background:#1d4ed8;} ";
+    html += ".info{background:#eef6ff;padding:12px 14px;border-radius:8px;margin-top:18px;font-size:14px;border:1px solid #cfe3ff;} ";
+    html += ".nav{margin-top:22px;text-align:center;}";
+    html += ".nav a{color:#2563eb;text-decoration:none;font-weight:600;}";
     html += "</style></head><body>";
-    html += "<div class='form-box'>";
+    html += "<div class='page'><div class='form-box'>";
     html += "<h2>血壓機型號設定</h2>";
     html += "<form method='post' action='/set_bp_model'>";
     html += "選擇血壓機型號:<br>";
@@ -230,7 +238,7 @@ public:
     html += "<a href='/'>返回主頁</a>";
     html += "</div>";
     
-    html += "</div></body></html>";
+    html += "</div></div></body></html>";
     
     server->send(200, "text/html", html);
   }
@@ -268,36 +276,44 @@ public:
     html += "<title>血壓機監控</title>";
     html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
     html += "<meta http-equiv='refresh' content='3'>"; // 每3秒自動刷新
-    html += "<style>body{font-family:Arial;margin:20px;}";
-    html += ".data-box{background:#f0f0f0;border:1px solid #ddd;padding:15px;border-radius:5px;margin-bottom:20px;}";
-    html += ".header{display:flex;justify-content:space-between;align-items:center;}";
-    html += ".config-btn{background:#007bff;color:white;padding:8px 12px;border:none;border-radius:4px;text-decoration:none;}";
-    html += ".info{font-size:12px;color:#666;margin-top:15px;}";
-    html += ".history-link{display:block;text-align:center;margin:15px 0;font-size:16px;}";
-    html += ".bp-data{display:flex;flex-wrap:wrap;justify-content:center;gap:20px;margin-top:15px;}";
-    html += ".bp-item{width:30%;text-align:center;padding:10px;border-radius:5px;}";
-    html += ".bp-value{font-size:24px;font-weight:bold;}";
-    html += ".systolic{background:#ffebee;}";
-    html += ".diastolic{background:#e8f5e9;}";
-    html += ".pulse{background:#e3f2fd;}";
-    html += ".abnormal{color:red;}";
-    html += ".normal{color:green;}";
-    html += "table{width:100%;border-collapse:collapse;margin:10px 0;}";
-    html += "th,td{border:1px solid #ddd;padding:8px;text-align:center;}";
-    html += "th{background-color:#f2f2f2;}";
-    html += "tr:nth-child(even){background-color:#f9f9f9;}";
+    html += "<style>body{font-family:'Segoe UI',Arial,sans-serif;margin:0;background:#f5f7fb;color:#1f2a44;}";
+    html += ".page{max-width:980px;margin:0 auto;padding:24px 16px 40px;}";
+    html += ".data-box{background:#fff;border:1px solid #e3e8f0;padding:18px 20px;border-radius:12px;margin-bottom:18px;box-shadow:0 8px 16px rgba(31,42,68,0.06);}";
+    html += ".header{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px;}";
+    html += ".title{font-size:24px;margin:0;}";
+    html += ".btn{background:#2563eb;color:white;padding:10px 14px;border:none;border-radius:10px;text-decoration:none;font-weight:600;font-size:14px;}";
+    html += ".btn.secondary{background:#0ea5e9;}";
+    html += ".btn:hover{opacity:0.92;}";
+    html += ".info{font-size:13px;color:#6b7280;margin-top:12px;line-height:1.6;}";
+    html += ".history-link{display:inline-flex;align-items:center;justify-content:center;margin:6px auto 20px;padding:10px 16px;border-radius:999px;background:#eef2ff;color:#1d4ed8;text-decoration:none;font-weight:600;}";
+    html += ".bp-data{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px;margin-top:12px;}";
+    html += ".bp-item{padding:12px;border-radius:10px;text-align:center;border:1px solid rgba(0,0,0,0.04);}";
+    html += ".bp-value{font-size:26px;font-weight:700;margin-top:6px;}";
+    html += ".systolic{background:#fef2f2;}";
+    html += ".diastolic{background:#ecfdf3;}";
+    html += ".pulse{background:#eff6ff;}";
+    html += ".abnormal{color:#dc2626;font-weight:700;}";
+    html += ".normal{color:#16a34a;font-weight:700;}";
+    html += "table{width:100%;border-collapse:collapse;margin:10px 0;font-size:14px;}";
+    html += "th,td{border-bottom:1px solid #e5e7eb;padding:10px 8px;text-align:center;}";
+    html += "th{background-color:#f8fafc;text-transform:uppercase;font-size:12px;letter-spacing:0.04em;color:#64748b;}";
+    html += "tr:nth-child(even){background-color:#f9fafb;}";
+    html += ".info-list{list-style:none;padding:0;margin:0;display:grid;gap:6px;}";
+    html += ".info-list li{display:flex;justify-content:space-between;gap:10px;}";
+    html += ".danger-link{color:#dc2626;text-decoration:none;font-weight:600;}";
     html += "</style></head><body>";
-    html += "<div class='header'><h1>血壓機數據監控</h1>";
-    html += "<div><a href='/config' class='config-btn'>WiFi設定</a> ";
-    html += "<a href='/bp_model' class='config-btn'>型號設定</a></div></div>";
+    html += "<div class='page'>";
+    html += "<div class='header'><h1 class='title'>血壓機數據監控</h1>";
+    html += "<div><a href='/config' class='btn'>WiFi設定</a> ";
+    html += "<a href='/bp_model' class='btn secondary'>型號設定</a></div></div>";
   
     // 解析後的血壓數據顯示區
     if (recordManager->getRecordCount() > 0) {
       BPData latest = recordManager->getLatestRecord();
       
       html += "<div class='data-box'>";
-      html += "<h2>最新血壓數據:</h2>";
-      html += "<p>測量時間: " + latest.timestamp + "</p>";
+      html += "<h2>最新血壓數據</h2>";
+      html += "<p class='info'>測量時間: " + latest.timestamp + "</p>";
       html += "<div class='bp-data'>";
       
       // 收縮壓顯示
@@ -325,7 +341,7 @@ public:
       
       // 最近5筆數據表格區塊
       html += "<div class='data-box'>";
-      html += "<h2>最近5筆血壓數據:</h2>";
+      html += "<h2>最近5筆血壓數據</h2>";
       html += "<table>";
       html += "<tr><th>測量時間</th><th>收縮壓 (mmHg)</th><th>舒張壓 (mmHg)</th><th>脈搏 (bpm)</th></tr>";
       
@@ -358,26 +374,28 @@ public:
     }
     
     // 原始數據顯示區
-    html += "<div class='data-box'><h2>原始數據:</h2><div id='data'>";
+    html += "<div class='data-box'><h2>原始數據</h2><div id='data'>";
     html += (*lastData == "") ? "等待數據..." : *lastData;
     html += "</div></div>";
     
     // 歷史記錄連結
+    html += "<div style='text-align:center;'>";
     html += "<a href='/history' class='history-link'>查看歷史記錄 (" + String(recordManager->getRecordCount()) + "筆)</a>";
+    html += "</div>";
     
-    html += "<div class='info'>";
-    html += "<p>連接信息:</p>";
-    html += "<ul>";
-    html += "<li>設備名稱: BP_checker</li>";
-    html += "<li>血壓機型號: " + *bp_model + "</li>";
-    html += "<li>IP地址: " + WiFi.localIP().toString() + "</li>";
-    html += "<li>可通過 <strong>http://" + String(*hostname) + ".local</strong> 訪問</li>";
-    html += "<li>AP熱點: " + String(*ap_ssid) + " (密碼: " + String(*ap_password) + ")</li>";
+    html += "<div class='data-box'>";
+    html += "<h2>連接資訊</h2>";
+    html += "<ul class='info-list'>";
+    html += "<li><span>設備名稱</span><strong>BP_checker</strong></li>";
+    html += "<li><span>血壓機型號</span><strong>" + *bp_model + "</strong></li>";
+    html += "<li><span>IP地址</span><strong>" + WiFi.localIP().toString() + "</strong></li>";
+    html += "<li><span>可訪問地址</span><strong>http://" + String(*hostname) + ".local</strong></li>";
+    html += "<li><span>AP熱點</span><strong>" + String(*ap_ssid) + " (" + String(*ap_password) + ")</strong></li>";
     html += "</ul></div>";
     
-    html += "<p><a href='/reset' style='color:red;'>重置WiFi設定</a></p>";
+    html += "<p><a href='/reset' class='danger-link'>重置WiFi設定</a></p>";
     
-    html += "</body></html>";
+    html += "</div></body></html>";
     
     server->send(200, "text/html", html);
   }
@@ -386,27 +404,30 @@ public:
     String html = "<html><head><meta charset='UTF-8'>";
     html += "<title>血壓機歷史記錄</title>";
     html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
-    html += "<style>body{font-family:Arial;margin:20px;}";
-    html += "table{width:100%;border-collapse:collapse;margin:20px 0;}";
-    html += "th,td{border:1px solid #ddd;padding:12px;text-align:center;}";
-    html += "th{background-color:#f2f2f2;}";
-    html += "tr:nth-child(even){background-color:#f9f9f9;}";
-    html += ".header{display:flex;justify-content:space-between;align-items:center;}";
-    html += ".back-btn{background:#007bff;color:white;padding:8px 12px;border:none;border-radius:4px;text-decoration:none;margin-right:10px;}";
-    html += ".clear-btn{background:#dc3545;color:white;padding:8px 12px;border:none;border-radius:4px;text-decoration:none;}";
-    html += ".abnormal{color:red;font-weight:bold;}";
-    html += ".normal{color:green;}";
+    html += "<style>body{font-family:'Segoe UI',Arial,sans-serif;margin:0;background:#f5f7fb;color:#1f2a44;}";
+    html += ".page{max-width:980px;margin:0 auto;padding:24px 16px 40px;}";
+    html += "table{width:100%;border-collapse:collapse;margin:18px 0;font-size:14px;background:#fff;border-radius:12px;overflow:hidden;}";
+    html += "th,td{border-bottom:1px solid #e5e7eb;padding:12px;text-align:center;}";
+    html += "th{background-color:#f8fafc;text-transform:uppercase;font-size:12px;letter-spacing:0.04em;color:#64748b;}";
+    html += "tr:nth-child(even){background-color:#f9fafb;}";
+    html += ".header{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:12px;}";
+    html += ".back-btn{background:#2563eb;color:white;padding:10px 14px;border:none;border-radius:10px;text-decoration:none;font-weight:600;}";
+    html += ".clear-btn{background:#dc2626;color:white;padding:10px 14px;border:none;border-radius:10px;text-decoration:none;font-weight:600;}";
+    html += ".abnormal{color:#dc2626;font-weight:bold;}";
+    html += ".normal{color:#16a34a;font-weight:bold;}";
     html += ".btn-group{display:flex;flex-wrap:wrap;gap:10px;}";
+    html += ".card{background:#fff;border:1px solid #e3e8f0;border-radius:12px;padding:16px 18px;box-shadow:0 8px 16px rgba(31,42,68,0.06);}";
+    html += ".data-link{color:#2563eb;text-decoration:none;font-weight:600;}";
     html += "</style></head><body>";
     
-    html += "<div class='header'>";
+    html += "<div class='page'><div class='header'>";
     html += "<h1>血壓機歷史記錄</h1>";
     html += "<div class='btn-group'>";
     html += "<a href='/' class='back-btn'>返回監控頁</a>";
     html += "<a href='/clear_history' class='clear-btn' onclick=\"return confirm('確定要清除所有歷史記錄嗎？');\">清除記錄</a>";
     html += "</div></div>";
     
-    html += "<table>";
+    html += "<div class='card'><table>";
     html += "<tr><th>測量時間</th><th>收縮壓 (mmHg)</th><th>舒張壓 (mmHg)</th><th>脈搏 (bpm)</th><th>原始數據</th></tr>";
     
     // 顯示歷史記錄
@@ -438,8 +459,8 @@ public:
       html += "<tr><td colspan='5'>尚無歷史記錄</td></tr>";
     }
     
-    html += "</table>";
-    html += "</body></html>";
+    html += "</table></div>";
+    html += "</div></body></html>";
     
     server->send(200, "text/html", html);
   }
@@ -492,17 +513,17 @@ public:
         String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>血壓機原始數據</title>";
         html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
         html += "<style>";
-        html += "body { font-family: 'Microsoft JhengHei', 'Microsoft YaHei', '微軟正黑體', '微软雅黑', Arial, sans-serif; margin: 20px; line-height: 1.6; }";
-        html += "h1 { color: #333; border-bottom: 1px solid #eee; padding-bottom: 10px; }";
-        html += "h3 { color: #555; margin-top: 20px; }";
-        html += "pre { background: #f5f5f5; padding: 15px; border-radius: 5px; overflow-x: auto; font-family: monospace; font-size: 14px; line-height: 1.4; }";
-        html += ".back-btn { display: inline-block; margin: 20px 0; background: #007bff; color: white; padding: 8px 15px; border: none; border-radius: 4px; text-decoration: none; }";
-        html += ".back-btn:hover { background: #0069d9; }";
-        html += ".data-section { margin-bottom: 25px; }";
+        html += "body { font-family: 'Segoe UI','Microsoft JhengHei','Microsoft YaHei','微軟正黑體','微软雅黑',Arial,sans-serif; margin: 0; line-height: 1.6; background:#f5f7fb; color:#1f2a44; }";
+        html += ".page { max-width: 860px; margin: 0 auto; padding: 24px 16px 40px; }";
+        html += "h1 { color: #1f2a44; margin-bottom: 12px; }";
+        html += ".card { background: #fff; border: 1px solid #e3e8f0; border-radius: 12px; padding: 18px 20px; box-shadow:0 8px 16px rgba(31,42,68,0.06); }";
+        html += "pre { background: #0f172a; color:#e2e8f0; padding: 16px; border-radius: 10px; overflow-x: auto; font-family: 'SFMono-Regular',Consolas,monospace; font-size: 13px; line-height: 1.5; }";
+        html += ".back-btn { display: inline-block; margin: 20px 0 0; background: #2563eb; color: white; padding: 10px 16px; border: none; border-radius: 10px; text-decoration: none; font-weight:600; }";
+        html += ".back-btn:hover { background: #1d4ed8; }";
         html += "</style></head><body>";
-        html += "<h1>血壓機原始數據</h1>";
+        html += "<div class='page'><h1>血壓機原始數據</h1><div class='card'>";
         html += record.rawData;
-        html += "<a href='/history' class='back-btn'>返回歷史記錄</a>";
+        html += "</div><a href='/history' class='back-btn'>返回歷史記錄</a></div>";
         html += "</body></html>";
         server->sendHeader("Content-Type", "text/html; charset=UTF-8");
         server->send(200, "text/html", html);
