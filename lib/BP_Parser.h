@@ -92,7 +92,8 @@ private:
     // 解析逗號分隔的數據
     for(int i = 0; i < dataStr.length(); i++) {
       if(dataStr.charAt(i) == ',' || i == dataStr.length() - 1) {
-        String value = dataStr.substring(startPos, i);
+        int endPos = (i == dataStr.length() - 1 && dataStr.charAt(i) != ',') ? i + 1 : i;
+        String value = dataStr.substring(startPos, endPos);
         value.trim();
         if(valueIndex < 10) {
           values[valueIndex] = value.toInt();
