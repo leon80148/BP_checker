@@ -32,6 +32,13 @@ ESP32-S3 板上有兩個 USB-C：
 
 請勿把血壓機 USB 接到 `TTL` 口，`TTL` 不是 USB Host。
 
+## 3D 列印外殼檔案
+
+開發版外殼檔案已收納於 `docs/3d_print_case/`：
+
+- `docs/3d_print_case/2.FCStd`：FreeCAD 原始設計檔
+- `docs/3d_print_case/bp_checker_case.3mf`：3MF 列印檔
+
 ## WiFi 行為
 
 - 沒有儲存 WiFi：進入純 AP 模式
