@@ -1,113 +1,128 @@
-# BP_checker (ESP32-S3 血壓機 USB 轉 WiFi)
+# BP_checker (ESP32-S3 USB OTG Host Blood Pressure Bridge)
 
-支援血壓機型號：預設 `OMRON-HBP9030`（可在網頁切換 `CUSTOM`）。
+Support target: `ESP32-S3` boards with a usable `USB OTG/Host` path.
 
-## 專案概述
+## Overview
 
-`BP_checker` 是一個跑在 ESP32-S3 的血壓資料轉發器：
-- 透過 **OTG USB Host (CDC)** 接收血壓機資料
-- 透過 WiFi 提供即時監控頁面
-- 保存最近 20 筆歷史量測
-- 提供原始資料檢視與基本異常標示
+`BP_checker` runs on an `ESP32-S3` and bridges blood pressure monitor data to Wi-Fi:
 
-## 2026-02 更新重點
+- Reads monitor data through `USB OTG Host`
+- Assumes the monitor exposes a supported `USB CDC` serial-like interface
+- Publishes a local Wi-Fi web UI for monitoring and history
+- Stores the latest 20 measurements
+- Preserves raw payload visibility for debugging
 
-- 血壓機資料通道改為 OTG USB Host（不再使用 TTL UART 收資料）
-- AP/STA 流程強化：STA 失敗時自動切回純 AP
-- AP 啟動時即開啟 HTTP 服務，避免等待 STA 期間網頁無回應
-- UI 改版：`/`、`/history`、`/config`、`/bp_model` 統一視覺語言
+This repository is `OTG-first`.
 
-詳細變更請看：[`docs/CHANGELOG.md`](docs/CHANGELOG.md)
+If your board does not support OTG Host, or your monitor integration only works through direct serial wiring, see the fallback guide:
 
-## 硬體與接線（重要）
+- [`docs/fallback-uart.md`](docs/fallback-uart.md)
 
-ESP32-S3 板上有兩個 USB-C：
+## Primary Support Matrix
 
-- `TTL`：給電腦連線（供電 / 燒錄 / 序列監看）
-- `OTG`：給血壓機 USB 線（資料接收）
+Primary support applies only when all of the following are true:
 
-建議接法：
-1. `TTL` 接電腦（或可供電 USB）
-2. `OTG` 接血壓機 USB
+- MCU family is `ESP32-S3`
+- The board exposes a usable `USB OTG/Host` connection
+- The OTG side can power the attached monitor or uses a validated powered topology
+- The blood pressure monitor enumerates as a supported `USB CDC` device
 
-請勿把血壓機 USB 接到 `TTL` 口，`TTL` 不是 USB Host。
+Boards outside that scope are not part of the main supported path.
 
-## 3D 列印外殼檔案
+Additional hardware guidance:
 
-開發版外殼檔案已收納於 `docs/3d_print_case/`：
+- [`docs/hardware.md`](docs/hardware.md)
 
-- `docs/3d_print_case/2.FCStd`：FreeCAD 原始設計檔
-- `docs/3d_print_case/bp_checker_case.3mf`：3MF 列印檔
+## Hardware Topology
 
-## WiFi 行為
+Expected primary wiring:
 
-- 沒有儲存 WiFi：進入純 AP 模式
-- 有儲存 WiFi：使用 AP+STA（可同時保留 AP）
-- STA 連線失敗：自動切回純 AP
+1. Connect the board programming/power USB port to the computer or stable power source
+2. Connect the blood pressure monitor USB cable to the board `OTG/Host` port
 
-AP 預設：
-- SSID: `ESP32_BP_checker`
-- 密碼: `12345678`
-- 設定頁: `http://192.168.4.1`
+Primary OTG flow does not require GPIO data wiring.
 
-## 首次啟動
+## First Boot
 
-1. 上電後連上 `ESP32_BP_checker`
-2. 開啟 `http://192.168.4.1` 設定現場 WiFi
-3. 之後可透過下列任一方式存取：
-   - `http://bp_checker.local`
-   - 裝置顯示的 LAN IP
+1. Power on the board
+2. Connect to `ESP32_BP_checker`
+3. Open `http://192.168.4.1`
+4. Configure the site Wi-Fi if needed
 
-## 網頁功能
+After configuration, access the device by either:
 
-### `/` 監控儀表板
-- 最新量測 KPI（收縮壓/舒張壓/脈搏）
-- 最近 5 筆資料
-- 原始資料檢視區
+- `http://bp_checker.local`
+- The device LAN IP shown in serial logs
 
-### `/history` 歷史記錄
-- 最近 20 筆歷史資料
-- 每筆可查看原始資料（`/raw_data?id=<index>`）
-- 支援清除歷史記錄
+## Web UI
 
-### `/config` WiFi 設定
-- 掃描 WiFi 並選擇
-- 支援手動輸入 SSID
+### `/`
 
-### `/bp_model` 型號設定
-- 可切換 `OMRON-HBP9030` / `CUSTOM`
+- Latest SYS/DIA/PUL values
+- Recent measurements
+- Raw data view
 
-## 開發與驗證
+### `/history`
 
-### UI 標記檢查
+- Latest 20 saved records
+- Raw payload drill-down
+- History clear action
+
+### `/config`
+
+- Wi-Fi scanning and selection
+- Manual SSID entry
+
+### `/bp_model`
+
+- `OMRON-HBP9030`
+- `CUSTOM`
+
+## Development
+
+### UI Markup Check
+
 ```bash
 bash scripts/check_ui_markup.sh
 ```
 
-### 編譯（ESP32-S3）
+### Compile
+
 ```bash
 arduino-cli compile -b esp32:esp32:esp32s3 --board-options USBMode=default /path/to/BP_checker
 ```
-若出現 `missing BP_checker.ino`，請先把主檔更名為 `BP_checker.ino`，或在臨時資料夾複製後改名再編譯。
 
-### 燒錄
+If the Arduino sketch folder name does not match the sketch file name, rename the main sketch to `BP_checker.ino` inside a `BP_checker` directory before compiling.
+
+### Upload
+
 ```bash
-arduino-cli compile --upload -b esp32:esp32:esp32s3 --board-options USBMode=default,UploadSpeed=115200 -p /dev/cu.usbserial-XXX /path/to/BP_checker
+arduino-cli compile --upload -b esp32:esp32:esp32s3 --board-options USBMode=default,UploadSpeed=115200 -p <PORT> /path/to/BP_checker
 ```
 
-## 常見問題
+## Troubleshooting
 
-### AP 連不上 / 設定頁打不開
-- 先確認已連到 `ESP32_BP_checker`
-- 直接開 `http://192.168.4.1`
-- 若手機跳出「無網際網路」請選擇仍保持連線
-- 看序列日誌是否有 `AP IP地址: 192.168.4.1`
+### The UI is reachable but there is no monitor data
 
-### 無法收到血壓機數據
-- 確認血壓機接在 `OTG` 口，不是 `TTL`
-- 序列日誌應看到 `OTG已連接到CDC裝置`
-- 目前資料格式依 `9600 8N1` CDC 設定讀取
+- Confirm the board is an `ESP32-S3` with usable OTG Host hardware
+- Confirm the monitor is connected to the OTG/Host port, not just the programming port
+- Confirm the monitor exposes a compatible `USB CDC` interface
+- Check serial logs for attach, unsupported-device, disconnect, or no-data states
 
-### `bp_checker.local` 無法開啟
-- 改用 LAN IP 直接訪問
-- 確認客戶端網路支援 mDNS
+### `bp_checker.local` does not open
+
+- Use the LAN IP directly
+- Confirm the client network supports mDNS
+
+### My board does not support OTG Host
+
+Use the fallback path instead:
+
+- [`docs/fallback-uart.md`](docs/fallback-uart.md)
+
+## 3D Printed Case Files
+
+Development enclosure files are stored in `docs/3d_print_case/`:
+
+- `docs/3d_print_case/2.FCStd` - FreeCAD source model
+- `docs/3d_print_case/bp_checker_case.3mf` - 3MF print file

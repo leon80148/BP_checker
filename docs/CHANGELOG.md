@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-03-14
+
+### Documentation
+- Defined the repository as an `ESP32-S3 + USB OTG Host + CDC` project.
+- Added `docs/hardware.md` for the primary support matrix and hardware topology.
+- Added `docs/fallback-uart.md` to isolate non-primary UART guidance.
+- Added OTG host design and implementation planning documents under `docs/plans/`.
+
 ## 2026-02-26
 
 ### UI/UX
