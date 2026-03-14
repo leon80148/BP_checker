@@ -5,47 +5,78 @@
 #include <time.h>
 #include "BP_Parser.h"
 #include "BPRecordManager.h"
+#include "transports/MonitorTransport.h"
 
 class DataProcessor {
 private:
   BP_Parser* bpParser;
   BP_RecordManager* recordManager;
   String* lastData;
-  bool* serial_active;
-  unsigned long* lastSerialActivity;
-  
-  // TTL串口的引腳定義
-  int rx_pin;
-  int tx_pin;
+  bool* transportActive;
+  unsigned long* lastTransportActivity;
+  String* transportName;
+  String* transportStatus;
+  MonitorTransport* transport;
+
+  String stateLabel(MonitorTransportState state) {
+    switch (state) {
+      case TRANSPORT_STATE_STARTING:
+        return "啟動中";
+      case TRANSPORT_STATE_WAITING_DEVICE:
+        return "等待裝置";
+      case TRANSPORT_STATE_READY:
+        return "就緒";
+      case TRANSPORT_STATE_RECEIVING:
+        return "接收中";
+      case TRANSPORT_STATE_UNSUPPORTED:
+        return "未就緒";
+      case TRANSPORT_STATE_ERROR:
+        return "錯誤";
+      default:
+        return "未知";
+    }
+  }
+
+  void syncTransportStatus() {
+    *transportName = String(transport->name());
+    *transportStatus = stateLabel(transport->state()) + " - " + transport->detail();
+  }
 
 public:
   DataProcessor(BP_Parser* bpParser, BP_RecordManager* recordManager,
-                String* lastData, bool* serial_active, unsigned long* lastSerialActivity,
-                int rx_pin, int tx_pin) {
+                String* lastData, bool* transportActive, unsigned long* lastTransportActivity,
+                String* transportName, String* transportStatus, MonitorTransport* transport) {
     this->bpParser = bpParser;
     this->recordManager = recordManager;
     this->lastData = lastData;
-    this->serial_active = serial_active;
-    this->lastSerialActivity = lastSerialActivity;
-    this->rx_pin = rx_pin;
-    this->tx_pin = tx_pin;
+    this->transportActive = transportActive;
+    this->lastTransportActivity = lastTransportActivity;
+    this->transportName = transportName;
+    this->transportStatus = transportStatus;
+    this->transport = transport;
   }
 
   void setup() {
-    // 初始化 TTL 串口用於與血壓機通訊
-    Serial1.begin(9600, SERIAL_8N1, rx_pin, tx_pin);
-    
+    bool ok = transport->begin();
+    syncTransportStatus();
     Serial.println("與電腦通訊: 115200 bps");
-    Serial.println("與血壓機通訊: 9600 bps (RX:" + String(rx_pin) + ", TX:" + String(tx_pin) + ")");
+    Serial.println("血壓機資料通道: " + *transportName);
+    Serial.println("資料通道狀態: " + *transportStatus);
+    if (!ok) {
+      Serial.println("注意: 目前資料通道尚未可用，系統仍會保持 WiFi 與網頁服務可用。");
+    }
   }
 
   bool processIncomingData() {
-    if (!Serial1.available()) {
+    transport->poll();
+    syncTransportStatus();
+
+    if (transport->available() <= 0) {
       return false;
     }
     
-    *lastSerialActivity = millis();
-    *serial_active = true;
+    *lastTransportActivity = millis();
+    *transportActive = true;
     
     // 讀取數據
     uint8_t buffer[100];
@@ -53,8 +84,12 @@ public:
     String dataStr = "<div class='data-section'><h3>原始數據 (十六進制):</h3><pre>";
     String asciiStr = "<div class='data-section'><h3>原始數據 (ASCII):</h3><pre>";
     
-    while (Serial1.available() && byteCount < 100) {
-      buffer[byteCount] = Serial1.read();
+    while (transport->available() > 0 && byteCount < 100) {
+      int incoming = transport->read();
+      if (incoming < 0) {
+        break;
+      }
+      buffer[byteCount] = static_cast<uint8_t>(incoming);
       
       // 組格式化的十六進制字串
       if (buffer[byteCount] < 0x10) dataStr += "0";
@@ -130,15 +165,18 @@ public:
     
     Serial.println("數據已準備，可通過網頁查看");
     Serial.println("----------------------------------");
+    syncTransportStatus();
     
     return true;
   }
 
   void checkActivity() {
-    // 如果TTL串口通訊長時間無活動，設為非活動狀態
-    if (*serial_active && (millis() - *lastSerialActivity > 5000)) {
-      *serial_active = false;
-      Serial.println("TTL串口未檢測到活動");
+    transport->poll();
+    syncTransportStatus();
+
+    if (*transportActive && (millis() - *lastTransportActivity > 5000)) {
+      *transportActive = false;
+      Serial.println("資料通道已超過 5 秒沒有新資料: " + *transportStatus);
     }
   }
 };

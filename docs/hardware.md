@@ -15,6 +15,14 @@ The intended field topology is:
 
 No GPIO data wiring is part of the primary path.
 
+## Current Firmware Migration Status
+
+The repository has been re-scoped around the OTG Host product definition, but the firmware is still in migration:
+
+- Transport selection has been separated from parser and UI logic
+- `UART fallback` remains available for working deployments
+- `USB OTG Host` is the target primary transport, but the CDC host runtime is not yet complete in the Arduino sketch
+
 ## Primary Support Criteria
 
 A board is in primary support scope only when all of these are true:

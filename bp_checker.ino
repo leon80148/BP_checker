@@ -9,10 +9,10 @@
 #include "lib/WebHandler.h"          // 引入網頁處理器庫
 #include "lib/WiFiManager.h"         // 引入WiFi管理器庫
 #include "lib/DataProcessor.h"       // 引入數據處理器庫
-
-// TTL串口的引腳定義 (UART)
-#define TTL_RX_PIN 44  // UART RX 引腳
-#define TTL_TX_PIN 43  // UART TX 引腳
+#include "lib/BPConfig.h"
+#include "lib/transports/MonitorTransport.h"
+#include "lib/transports/UartTransport.h"
+#include "lib/transports/UsbCdcTransport.h"
 
 // AP模式設定
 const char* ap_ssid = "ESP32_BP_checker";
@@ -23,9 +23,11 @@ const char* hostname = "bp_checker"; // mDNS主機名
 String bp_model = "OMRON-HBP9030"; // 預設型號
 
 // 串口通訊狀態
-bool serial_active = false;
-unsigned long lastSerialActivity = 0;
+bool transportActive = false;
+unsigned long lastTransportActivity = 0;
 String lastData = "";
+String transportName = "";
+String transportStatus = "";
 
 // 建立Web伺服器
 WebServer server(80);
@@ -43,6 +45,7 @@ BP_RecordManager recordManager(20); // 保存最近20筆記錄
 WebHandler* webHandler;
 WiFiManager* wifiManager;
 DataProcessor* dataProcessor;
+MonitorTransport* monitorTransport;
 
 #define RESET_PIN 0  // 使用GPIO0按鈕，多數ESP32開發板上有這個按鈕
 
@@ -53,14 +56,21 @@ void setup() {
   
   // 初始化各個模組
   webHandler = new WebHandler(&server, &preferences, &recordManager, 
-                             &bp_model, &lastData, &hostname, &ap_ssid, &ap_password);
+                             &bp_model, &lastData, &transportName, &transportStatus,
+                             &hostname, &ap_ssid, &ap_password);
   
   wifiManager = new WiFiManager(&server, &preferences, 
                                ap_ssid, ap_password, hostname);
+
+  if (kTransportMode == TRANSPORT_MODE_OTG_PRIMARY) {
+    monitorTransport = new UsbCdcTransport();
+  } else {
+    monitorTransport = new UartTransport(&Serial1, kUartRxPin, kUartTxPin, kMonitorBaudRate);
+  }
   
   dataProcessor = new DataProcessor(&bpParser, &recordManager, 
-                                   &lastData, &serial_active, &lastSerialActivity,
-                                   TTL_RX_PIN, TTL_TX_PIN);
+                                   &lastData, &transportActive, &lastTransportActivity,
+                                   &transportName, &transportStatus, monitorTransport);
   
   // 設置血壓解析器型號
   preferences.begin("wifi-config", false);

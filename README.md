@@ -12,7 +12,13 @@ Support target: `ESP32-S3` boards with a usable `USB OTG/Host` path.
 - Stores the latest 20 measurements
 - Preserves raw payload visibility for debugging
 
-This repository is `OTG-first`.
+This repository is `OTG-first` at the product-definition level.
+
+Current firmware status:
+
+- Transport architecture is being migrated toward `USB OTG Host`
+- The repository keeps `UART fallback` available while the CDC host data path is being completed
+- The active transport is shown in serial logs and the web UI
 
 If your board does not support OTG Host, or your monitor integration only works through direct serial wiring, see the fallback guide:
 
@@ -35,7 +41,7 @@ Additional hardware guidance:
 
 ## Hardware Topology
 
-Expected primary wiring:
+Target primary wiring:
 
 1. Connect the board programming/power USB port to the computer or stable power source
 2. Connect the blood pressure monitor USB cable to the board `OTG/Host` port
@@ -108,6 +114,7 @@ arduino-cli compile --upload -b esp32:esp32:esp32s3 --board-options USBMode=defa
 - Confirm the monitor is connected to the OTG/Host port, not just the programming port
 - Confirm the monitor exposes a compatible `USB CDC` interface
 - Check serial logs for attach, unsupported-device, disconnect, or no-data states
+- If the firmware reports `UART fallback`, use the board-specific serial wiring path instead of OTG
 
 ### `bp_checker.local` does not open
 

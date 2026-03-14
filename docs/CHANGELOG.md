@@ -8,6 +8,11 @@
 - Added `docs/fallback-uart.md` to isolate non-primary UART guidance.
 - Added OTG host design and implementation planning documents under `docs/plans/`.
 
+### Firmware
+- Introduced a transport abstraction layer so parser/UI logic no longer depends directly on `Serial1`.
+- Added explicit transport status reporting for the web UI and serial logs.
+- Kept `UART fallback` as the default runtime mode while the OTG CDC host backend remains under migration.
+
 ## 2026-02-26
 
 ### UI/UX

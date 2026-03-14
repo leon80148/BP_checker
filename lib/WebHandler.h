@@ -15,6 +15,8 @@ private:
   BP_RecordManager* recordManager;
   String* bp_model;
   String* lastData;
+  String* transportName;
+  String* transportStatus;
   const char** hostname;
   const char** ap_ssid;
   const char** ap_password;
@@ -160,12 +162,15 @@ private:
 
 public:
   WebHandler(WebServer* server, Preferences* preferences, BP_RecordManager* recordManager,
-             String* bp_model, String* lastData, const char** hostname, const char** ap_ssid, const char** ap_password) {
+             String* bp_model, String* lastData, String* transportName, String* transportStatus,
+             const char** hostname, const char** ap_ssid, const char** ap_password) {
     this->server = server;
     this->preferences = preferences;
     this->recordManager = recordManager;
     this->bp_model = bp_model;
     this->lastData = lastData;
+    this->transportName = transportName;
+    this->transportStatus = transportStatus;
     this->hostname = hostname;
     this->ap_ssid = ap_ssid;
     this->ap_password = ap_password;
@@ -424,7 +429,7 @@ public:
     } else {
       html += "<section class='panel latest-vitals'>";
       html += "<h2>最新量測</h2>";
-      html += "<p class='helper-text'>尚未收到血壓數據。請確認血壓機連線與 TTL 腳位後再量測。</p>";
+      html += "<p class='helper-text'>尚未收到血壓數據。請先確認目前資料通道狀態，再檢查血壓機連線。</p>";
       html += "<span class='last-updated'>每 3 秒自動刷新</span>";
       html += "</section>";
     }
@@ -444,6 +449,8 @@ public:
     html += "<ul class='status-list'>";
     html += "<li><span>設備名稱</span><strong>BP_checker</strong></li>";
     html += "<li><span>血壓機型號</span><strong>" + *bp_model + "</strong></li>";
+    html += "<li><span>資料通道</span><strong>" + *transportName + "</strong></li>";
+    html += "<li><span>通道狀態</span><strong>" + *transportStatus + "</strong></li>";
     html += "<li><span>WiFi IP</span><strong>" + wifiIp + "</strong></li>";
     html += "<li><span>可訪問網址</span><strong>http://" + String(*hostname) + ".local</strong></li>";
     html += "<li><span>AP 熱點</span><strong>" + String(*ap_ssid) + " (" + String(*ap_password) + ")</strong></li>";
