@@ -16,8 +16,8 @@ This repository is `OTG-first` at the product-definition level.
 
 Current firmware status:
 
-- Transport architecture is being migrated toward `USB OTG Host`
-- The repository keeps `UART fallback` available while the CDC host data path is being completed
+- `USB OTG Host` is the default runtime transport on `ESP32-S3`
+- `UART fallback` remains available through `lib/BPConfig.h`
 - The active transport is shown in serial logs and the web UI
 
 If your board does not support OTG Host, or your monitor integration only works through direct serial wiring, see the fallback guide:

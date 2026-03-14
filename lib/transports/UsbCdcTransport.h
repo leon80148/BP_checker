@@ -5,49 +5,23 @@
 #include "MonitorTransport.h"
 
 class UsbCdcTransport : public MonitorTransport {
-private:
-  MonitorTransportState currentState;
-  String currentDetail;
-
 public:
-  UsbCdcTransport() : currentState(TRANSPORT_STATE_STARTING) {}
+  UsbCdcTransport();
+  ~UsbCdcTransport() override;
 
-  bool begin() override {
-#if __has_include("usb/usb_host.h")
-    currentState = TRANSPORT_STATE_UNSUPPORTED;
-    currentDetail = "OTG selected. USB Host headers exist in the toolchain, but CDC host runtime is not implemented in this Arduino sketch yet.";
-#else
-    currentState = TRANSPORT_STATE_UNSUPPORTED;
-    currentDetail = "OTG selected, but the installed toolchain does not expose USB Host headers to the sketch build.";
-#endif
-    return false;
-  }
+  bool begin() override;
+  void poll() override;
+  int available() override;
+  int read() override;
+  const char* name() const override;
+  MonitorTransportState state() const override;
+  String detail() const override;
+  bool isFallback() const override;
 
-  void poll() override {}
-
-  int available() override {
-    return 0;
-  }
-
-  int read() override {
-    return -1;
-  }
-
-  const char* name() const override {
-    return "USB OTG Host";
-  }
-
-  MonitorTransportState state() const override {
-    return currentState;
-  }
-
-  String detail() const override {
-    return currentDetail;
-  }
-
-  bool isFallback() const override {
-    return false;
-  }
+  // Exposed so the OTG callbacks implemented in sketch/src can access state
+  // without pulling ESP-IDF USB types into this header.
+  struct Impl;
+  Impl* impl;
 };
 
 #endif

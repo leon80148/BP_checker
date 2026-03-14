@@ -6,7 +6,7 @@ enum MonitorTransportMode {
   TRANSPORT_MODE_UART_FALLBACK = 1,
 };
 
-static constexpr MonitorTransportMode kTransportMode = TRANSPORT_MODE_UART_FALLBACK;
+static constexpr MonitorTransportMode kTransportMode = TRANSPORT_MODE_OTG_PRIMARY;
 
 static constexpr int kUartRxPin = 44;
 static constexpr int kUartTxPin = 43;

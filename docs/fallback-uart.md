@@ -38,4 +38,8 @@ When using UART fallback for a specific board, document:
 
 ## Current Repository State
 
-The legacy implementation in this repository still contains hard-coded UART behavior. That code should be treated as migration history, not as the primary supported wiring model.
+The repository keeps UART support as an explicit fallback transport.
+
+- Change `kTransportMode` in `lib/BPConfig.h` to `TRANSPORT_MODE_UART_FALLBACK`
+- Set the correct board-specific `RX` and `TX` pins in the same file
+- Treat UART as an intentional deployment choice, not the default wiring model

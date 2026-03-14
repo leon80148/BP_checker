@@ -11,7 +11,9 @@
 ### Firmware
 - Introduced a transport abstraction layer so parser/UI logic no longer depends directly on `Serial1`.
 - Added explicit transport status reporting for the web UI and serial logs.
-- Kept `UART fallback` as the default runtime mode while the OTG CDC host backend remains under migration.
+- Added a compiled-in USB CDC OTG host backend under `src/`.
+- Switched the default runtime mode to `USB OTG Host` on `ESP32-S3`.
+- Kept `UART fallback` available through `lib/BPConfig.h`.
 
 ## 2026-02-26
 

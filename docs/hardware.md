@@ -15,13 +15,13 @@ The intended field topology is:
 
 No GPIO data wiring is part of the primary path.
 
-## Current Firmware Migration Status
+## Current Firmware Status
 
-The repository has been re-scoped around the OTG Host product definition, but the firmware is still in migration:
+The repository now builds with a real `USB OTG Host` CDC transport in the Arduino sketch:
 
-- Transport selection has been separated from parser and UI logic
-- `UART fallback` remains available for working deployments
-- `USB OTG Host` is the target primary transport, but the CDC host runtime is not yet complete in the Arduino sketch
+- `USB OTG Host` is the default runtime on supported `ESP32-S3` boards
+- `UART fallback` remains available for working deployments that cannot use OTG
+- Transport selection is isolated from parser and UI logic through `MonitorTransport`
 
 ## Primary Support Criteria
 
