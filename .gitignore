@@ -1,1 +1,18 @@
+# Git worktrees
 .worktrees/
+
+# PlatformIO / Arduino build output
+.pio/
+.pioenvs/
+.piolibdeps/
+.vscode/
+*.elf
+*.hex
+
+# Python helper scripts
+__pycache__/
+*.py[cod]
+
+# OS files
+.DS_Store
+Thumbs.db
