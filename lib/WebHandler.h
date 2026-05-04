@@ -498,7 +498,9 @@ private:
 
   void handleMonitor() {
     String html;
-    html.reserve(8192); // CSS ~4.5KB + dashboard body ~3KB
+    // CSS ~5.2KB + KPI/recent/raw-data/conn/danger ~3KB + AJAX JS ~1.5KB（F() 字串 += 進 html）
+    // 估計 ~9.7KB，預留到 11264 完全避免 realloc
+    html.reserve(11264);
     // 不再用 meta refresh：JS 每 3 秒 fetch /api/latest 只更新數值節點，
     // 替代每次重建 ~10KB 整頁 HTML。
     html = buildPageStart("血壓監控儀表板", "/", false);
