@@ -722,10 +722,9 @@ private:
       recordObj["pulse"] = record.pulse;
     }
 
-    // 直接 stream 到 client socket：省掉 ~jsonStr String 中介緩衝（~2KB heap 高峰）
-    server->setContentLength(measureJson(doc));
-    server->send(200, "application/json", "");
-    serializeJson(doc, server->client());
+    String jsonStr;
+    serializeJson(doc, jsonStr);
+    server->send(200, "application/json", jsonStr);
   }
 
   // 給 dashboard JS 輪詢用的小型狀態端點，~300 bytes
@@ -752,9 +751,9 @@ private:
     if (WiFi.status() == WL_CONNECTED) wifiIp = WiFi.localIP().toString();
     doc["wifi_ip"] = wifiIp.c_str();
 
-    server->setContentLength(measureJson(doc));
-    server->send(200, "application/json", "");
-    serializeJson(doc, server->client());
+    String jsonStr;
+    serializeJson(doc, jsonStr);
+    server->send(200, "application/json", jsonStr);
   }
 
   void handleClearHistory() {
