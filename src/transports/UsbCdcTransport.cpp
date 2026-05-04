@@ -135,9 +135,10 @@ static bool cdcDataCallback(const uint8_t* data, size_t dataLen, void* userArg) 
   }
 
   impl->currentState = TRANSPORT_STATE_RECEIVING;
+  // String::operator=(const char*) 直接用，免 `String("...")` 臨時建構
   impl->currentDetail = overflowed
-    ? String("Receiving CDC data (RX buffer overflow, bytes dropped)")
-    : String("Receiving CDC data");
+    ? "Receiving CDC data (RX buffer overflow, bytes dropped)"
+    : "Receiving CDC data";
   return true;
 }
 
