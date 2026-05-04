@@ -105,20 +105,23 @@ public:
   }
 
   // 獲取某個指定位置的記錄（0 = 最新）
-  BPData getRecord(int index) {
+  // 回傳 const ref：BPData 含 String 欄位（rawData 可達 ~700B），by-value 多次呼叫
+  // 累積複製成本可觀。out-of-range 回傳一個靜態 default 實例。
+  const BPData& getRecord(int index) const {
     if (index < 0 || index >= _recordCount) {
-      return BPData{};
+      static const BPData kEmpty;
+      return kEmpty;
     }
     int actualIndex = (_historyIndex - index - 1 + _maxRecords) % _maxRecords;
     return _records[actualIndex];
   }
 
-  BPData getLatestRecord() {
+  const BPData& getLatestRecord() const {
     return getRecord(0);
   }
 
-  int getRecordCount() { return _recordCount; }
-  int getMaxRecords() { return _maxRecords; }
+  int getRecordCount() const { return _recordCount; }
+  int getMaxRecords() const { return _maxRecords; }
 
   void clearRecords() {
     _historyIndex = 0;

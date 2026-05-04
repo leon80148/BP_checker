@@ -276,10 +276,15 @@ void UsbCdcTransport::poll() {
 }
 
 int UsbCdcTransport::available() {
-  if (impl->rxHead >= impl->rxTail) {
-    return static_cast<int>(impl->rxHead - impl->rxTail);
+  // 一次性 snapshot 兩個 volatile 索引；若分開讀取，生產者在 wrap 點
+  // (rxHead 1023 -> 0) 會讓「先 head 後 tail」與「後 head 後 tail」不一致，
+  // 計算出負值。固定先讀取再比對可保證一致性。
+  size_t head = impl->rxHead;
+  size_t tail = impl->rxTail;
+  if (head >= tail) {
+    return static_cast<int>(head - tail);
   }
-  return static_cast<int>((sizeof(impl->rxBuffer) - impl->rxTail) + impl->rxHead);
+  return static_cast<int>(sizeof(impl->rxBuffer) - tail + head);
 }
 
 int UsbCdcTransport::read() {

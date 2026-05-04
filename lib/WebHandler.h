@@ -402,7 +402,7 @@ public:
 
     int recordCount = recordManager->getRecordCount();
     if (recordCount > 0) {
-      BPData latest = recordManager->getLatestRecord();
+      const BPData& latest = recordManager->getLatestRecord();
 
       bool systolicBad = isSystolicAbnormal(latest.systolic);
       bool diastolicBad = isDiastolicAbnormal(latest.diastolic);
@@ -443,7 +443,7 @@ public:
 
       int displayCount = min(5, recordCount);
       for (int i = 0; i < displayCount; i++) {
-        BPData record = recordManager->getRecord(i);
+        const BPData& record = recordManager->getRecord(i);
         bool sb = isSystolicAbnormal(record.systolic);
         bool db = isDiastolicAbnormal(record.diastolic);
         bool pb = isPulseAbnormal(record.pulse);
@@ -517,7 +517,7 @@ public:
     int recordCount = recordManager->getRecordCount();
     if (recordCount > 0) {
       for (int i = 0; i < recordCount; i++) {
-        BPData record = recordManager->getRecord(i);
+        const BPData& record = recordManager->getRecord(i);
         bool sb = isSystolicAbnormal(record.systolic);
         bool db = isDiastolicAbnormal(record.diastolic);
         bool pb = isPulseAbnormal(record.pulse);
@@ -556,7 +556,7 @@ public:
 
     int recordCount = recordManager->getRecordCount();
     for (int i = 0; i < recordCount; i++) {
-      BPData record = recordManager->getRecord(i);
+      const BPData& record = recordManager->getRecord(i);
 
       JsonObject recordObj = records.createNestedObject();
       recordObj["timestamp"] = record.timestamp;
@@ -586,7 +586,7 @@ public:
   void handleRawData() {
     String id = server->arg("id");
     if (id.length() > 0) {
-      BPData record = recordManager->getRecord(id.toInt());
+      const BPData& record = recordManager->getRecord(id.toInt());
       if (record.valid) {
         String html = buildPageStart("原始數據", "/history");
         html += "<section class='panel raw-data'>";
