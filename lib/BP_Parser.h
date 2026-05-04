@@ -42,19 +42,8 @@ public:
     } else {
       result = parseGeneric(buffer, length);
     }
-
-    // sub-parser 可能未填 rawData；只在需要時建構
-    if (result.rawData.isEmpty()) {
-      String hexData;
-      hexData.reserve(length * 3);
-      for (int i = 0; i < length; i++) {
-        if (buffer[i] < 0x10) hexData += '0';
-        hexData += String(buffer[i], HEX);
-        hexData += ' ';
-      }
-      result.rawData = hexData;
-    }
-
+    // rawData 由呼叫端負責填入（DataProcessor 已產生 HTML 包裝的 hex/ascii，
+    // 在 parse() 重建一次再被覆寫是浪費）。
     result.valid = (result.systolic > 0 && result.diastolic > 0 && result.pulse > 0);
     return result;
   }
