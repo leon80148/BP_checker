@@ -319,14 +319,16 @@ private:
       n = lastScanCount;
     }
 
-    String js = "<script>";
-    js += "function toggleManualSSID(){";
-    js += "var select=document.getElementById('wifi-select');";
-    js += "var manualInput=document.getElementById('manual-ssid');";
-    js += "if(select.value==='manual'){manualInput.style.display='block';manualInput.required=true;}";
-    js += "else{manualInput.style.display='none';manualInput.required=false;}";
-    js += "}";
-    js += "</script>";
+    // 編譯期合併字面量（adjacent string literal concatenation）一次配置 String
+    String js =
+      "<script>"
+      "function toggleManualSSID(){"
+        "var select=document.getElementById('wifi-select');"
+        "var manualInput=document.getElementById('manual-ssid');"
+        "if(select.value==='manual'){manualInput.style.display='block';manualInput.required=true;}"
+        "else{manualInput.style.display='none';manualInput.required=false;}"
+      "}"
+      "</script>";
 
     String html = buildPageStart("WiFi 設定", "/config", false, js);
     html.reserve(8192); // reserve 必須在 buildPageStart 之後；含 CSS + scan 結果 dropdown
