@@ -594,9 +594,11 @@ public:
           "const u=document.getElementById('last-updated');"
           "if(u)u.textContent='最後更新：'+d.timestamp+'（每 3 秒刷新）';"
         "}else if(document.getElementById('kpi-sys')){"
-          // count 從 >0 變回 0（例如剛清歷史）：reload 切換到 empty state，避免殘留舊卡片
           "location.reload();return;"
         "}}catch(e){}"
+        // 用 setTimeout chain 取代 setInterval：確保前一次 poll 完成（含網路慢/錯誤）
+        // 後才排下一次，避免設備重啟或卡頓時 request 堆疊
+        "finally{setTimeout(bpRefresh,3000);}"
       "}"
       "function bpKpi(iv,ip,v,bad,ok){"
         "const a=document.getElementById(iv),b=document.getElementById(ip);"
@@ -608,7 +610,7 @@ public:
         "if(a){a.textContent=v;a.className='kpi-value '+(bad?'value-bad':'value-good');}"
         "if(b){b.textContent=bad?'異常':'正常';b.className='state-pill '+(bad?'state-alert':'state-ok');}"
       "}"
-      "setInterval(bpRefresh,3000);"
+      "bpRefresh();"
       "</script>"
     );
 
