@@ -329,9 +329,8 @@ private:
     js += "}";
     js += "</script>";
 
-    String html;
-    html.reserve(8192); // 含 CSS + scan 結果 dropdown
-    html = buildPageStart("WiFi 設定", "/config", false, js);
+    String html = buildPageStart("WiFi 設定", "/config", false, js);
+    html.reserve(8192); // reserve 必須在 buildPageStart 之後；含 CSS + scan 結果 dropdown
     html += "<section class='panel form-shell'>";
     html += "<h2>網路連線設定</h2>";
     html += "<p class='helper-text'>選擇可用 WiFi，或使用手動輸入 SSID。儲存後裝置會自動重啟並嘗試連線。</p>";
@@ -497,13 +496,12 @@ private:
   }
 
   void handleMonitor() {
-    String html;
-    // CSS ~5.2KB + KPI/recent/raw-data/conn/danger ~3KB + AJAX JS ~1.5KB（F() 字串 += 進 html）
-    // 估計 ~9.7KB，預留到 11264 完全避免 realloc
-    html.reserve(11264);
     // 不再用 meta refresh：JS 每 3 秒 fetch /api/latest 只更新數值節點，
     // 替代每次重建 ~10KB 整頁 HTML。
-    html = buildPageStart("血壓監控儀表板", "/", false);
+    String html = buildPageStart("血壓監控儀表板", "/", false);
+    // reserve 必須在 assignment 之後（buildPageStart 回傳的 String 透過 move-assignment
+    // 會把 html 容量重設成它自己的 ~6KB）。完整 dashboard ~11.5KB worst case。
+    html.reserve(11264);
 
     int recordCount = recordManager->getRecordCount();
     if (recordCount > 0) {
@@ -654,11 +652,10 @@ private:
   }
 
   void handleHistory() {
-    String html;
+    String html = buildPageStart("血壓歷史記錄", "/history");
+    // reserve 必須在 buildPageStart 回傳之後（move-assignment 會把容量重設）。
     // CSS ~4.5KB + nav/header ~700B + 20 列表（~250B/row × 20 = 5KB）+ danger zone ~300B
-    // 估計 ~10.5KB，留餘裕到 12288 避免 realloc
     html.reserve(12288);
-    html = buildPageStart("血壓歷史記錄", "/history");
 
     html += "<section class='panel history-table'>";
     html += "<div class='section-head'>";
