@@ -49,7 +49,8 @@ static void usbHostDaemonTask(void* arg) {
   esp_err_t ret = usb_host_install(&hostConfig);
   if (ret != ESP_OK) {
     impl->currentState = TRANSPORT_STATE_ERROR;
-    impl->currentDetail = "usb_host_install failed: " + String(static_cast<int>(ret));
+    impl->currentDetail = "usb_host_install failed: ";
+    impl->currentDetail += static_cast<int>(ret);
     vTaskDelete(nullptr);
     return;
   }
@@ -71,7 +72,8 @@ static void usbHostDaemonTask(void* arg) {
   ret = cdc_acm_host_install(&driverConfig);
   if (ret != ESP_OK) {
     impl->currentState = TRANSPORT_STATE_ERROR;
-    impl->currentDetail = "cdc_acm_host_install failed: " + String(static_cast<int>(ret));
+    impl->currentDetail = "cdc_acm_host_install failed: ";
+    impl->currentDetail += static_cast<int>(ret);
     usb_host_uninstall();
     vTaskDelete(nullptr);
     return;
@@ -89,7 +91,8 @@ static void usbHostDaemonTask(void* arg) {
     ret = usb_host_lib_handle_events(pdMS_TO_TICKS(100), &eventFlags);
     if (ret != ESP_OK && ret != ESP_ERR_TIMEOUT) {
       impl->currentState = TRANSPORT_STATE_ERROR;
-      impl->currentDetail = "usb_host_lib_handle_events failed: " + String(static_cast<int>(ret));
+      impl->currentDetail = "usb_host_lib_handle_events failed: ";
+      impl->currentDetail += static_cast<int>(ret);
     }
 
     if (eventFlags & USB_HOST_LIB_EVENT_FLAGS_NO_CLIENTS) {
@@ -155,7 +158,8 @@ static void cdcEventCallback(const cdc_acm_host_dev_event_data_t* event, void* u
       // 主動 close handle 並把 connected 拉回 false，下次 poll() 會嘗試重連
       // （deviceAttached 不清，因為裝置仍在 USB 匯流排上）。
       impl->currentState = TRANSPORT_STATE_ERROR;
-      impl->currentDetail = "CDC error: " + String(event->data.error);
+      impl->currentDetail = "CDC error: ";
+      impl->currentDetail += event->data.error;
       if (impl->cdcHandle != nullptr) {
         cdc_acm_host_close(impl->cdcHandle);
         impl->cdcHandle = nullptr;
@@ -285,9 +289,11 @@ void UsbCdcTransport::poll() {
       esp_err_t lcRet = cdc_acm_host_line_coding_set(handle, &lineCoding);
       esp_err_t clsRet = cdc_acm_host_set_control_line_state(handle, true, true);
       if (lcRet != ESP_OK || clsRet != ESP_OK) {
-        impl->currentDetail = "CDC opened but config failed (lc=" +
-                              String(static_cast<int>(lcRet)) +
-                              ", cls=" + String(static_cast<int>(clsRet)) + ")";
+        impl->currentDetail = "CDC opened but config failed (lc=";
+        impl->currentDetail += static_cast<int>(lcRet);
+        impl->currentDetail += ", cls=";
+        impl->currentDetail += static_cast<int>(clsRet);
+        impl->currentDetail += ")";
       }
       break;
     }
