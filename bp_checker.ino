@@ -47,15 +47,13 @@ WiFiManager* wifiManager;
 DataProcessor* dataProcessor;
 MonitorTransport* monitorTransport;
 
-#define RESET_PIN 0  // 使用GPIO0按鈕，多數ESP32開發板上有這個按鈕
-
 void setup() {
   // 初始化串列埠監視器
   Serial.begin(115200);
   delay(1000); // 等待串列埠穩定
 
   // pinMode 提早設定，讓 reset button 在後續 WiFi 連線階段也能被偵測
-  pinMode(RESET_PIN, INPUT_PULLUP);
+  pinMode(kResetPin, INPUT_PULLUP);
 
   // 初始化各個模組
   webHandler = new WebHandler(&server, &preferences, &recordManager,
@@ -127,7 +125,7 @@ void loop() {
   // 非阻塞 reset button：按住 3 秒才重置，避免誤觸卡 loop
   // 只清 ssid/password，保留 bp_model 等其他設定（與 UI 標籤「重置 WiFi 設定」一致）
   static unsigned long resetPressStart = 0;
-  if (digitalRead(RESET_PIN) == LOW) {
+  if (digitalRead(kResetPin) == LOW) {
     if (resetPressStart == 0) {
       resetPressStart = millis();
     } else if (millis() - resetPressStart >= 3000) {
