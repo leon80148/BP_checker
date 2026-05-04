@@ -61,8 +61,12 @@ public:
     startServerOnce();
 
     Serial.println("HTTP伺服器已啟動");
-    Serial.println("請連接到WiFi: " + String(ap_ssid) + "，密碼: " + String(ap_password));
-    Serial.println("然後開啟瀏覽器訪問: " + myIP.toString());
+    Serial.print("請連接到WiFi: ");
+    Serial.print(ap_ssid);
+    Serial.print("，密碼: ");
+    Serial.println(ap_password);
+    Serial.print("然後開啟瀏覽器訪問: ");
+    Serial.println(myIP);
   }
 
   // 啟動 STA 連線（不阻塞）；webserver 立即上線，
@@ -111,7 +115,9 @@ public:
         MDNS.end();
       }
       if (MDNS.begin(hostname)) {
-        Serial.println("mDNS已啟動，可通過 http://" + String(hostname) + ".local 訪問");
+        Serial.print("mDNS已啟動，可通過 http://");
+        Serial.print(hostname);
+        Serial.println(".local 訪問");
         mdnsStarted = true;
       } else {
         Serial.println("mDNS服務啟動失敗");
