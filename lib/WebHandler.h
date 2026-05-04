@@ -558,12 +558,26 @@ public:
     html += "<h2>連線資訊</h2>";
     html += "<ul class='status-list'>";
     html += "<li><span>設備名稱</span><strong>BP_checker</strong></li>";
-    html += "<li><span>血壓機型號</span><strong>" + htmlEscape(*bp_model) + "</strong></li>";
-    html += "<li><span>資料通道</span><strong id='conn-transport'>" + *transportName + "</strong></li>";
-    html += "<li><span>通道狀態</span><strong id='conn-status'>" + *transportStatus + "</strong></li>";
-    html += "<li><span>WiFi IP</span><strong id='conn-ip'>" + wifiIp + "</strong></li>";
-    html += "<li><span>可訪問網址</span><strong>http://" + String(*hostname) + ".local</strong></li>";
-    html += "<li><span>AP 熱點</span><strong>" + String(*ap_ssid) + " (" + String(*ap_password) + ")</strong></li>";
+    html += "<li><span>血壓機型號</span><strong>";
+    html += htmlEscape(*bp_model);
+    html += "</strong></li>";
+    html += "<li><span>資料通道</span><strong id='conn-transport'>";
+    html += *transportName;
+    html += "</strong></li>";
+    html += "<li><span>通道狀態</span><strong id='conn-status'>";
+    html += *transportStatus;
+    html += "</strong></li>";
+    html += "<li><span>WiFi IP</span><strong id='conn-ip'>";
+    html += wifiIp;
+    html += "</strong></li>";
+    html += "<li><span>可訪問網址</span><strong>http://";
+    html += *hostname; // const char* via String += overload, no temporary
+    html += ".local</strong></li>";
+    html += "<li><span>AP 熱點</span><strong>";
+    html += *ap_ssid;
+    html += " (";
+    html += *ap_password;
+    html += ")</strong></li>";
     html += "</ul>";
     html += "</section>";
 
