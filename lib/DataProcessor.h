@@ -71,8 +71,10 @@ public:
     *transportName = transport->name(); // const literal，僅在 setup 寫一次
     syncTransportStatus();
     Serial.println("與電腦通訊: 115200 bps");
-    Serial.println("血壓機資料通道: " + *transportName);
-    Serial.println("資料通道狀態: " + *transportStatus);
+    Serial.print("血壓機資料通道: ");
+    Serial.println(*transportName);
+    Serial.print("資料通道狀態: ");
+    Serial.println(*transportStatus);
     if (!ok) {
       Serial.println("注意: 目前資料通道尚未可用，系統仍會保持 WiFi 與網頁服務可用。");
     }
@@ -208,7 +210,8 @@ public:
   void checkActivity() {
     if (transportActive && (millis() - lastTransportActivity > 5000)) {
       transportActive = false;
-      Serial.println("資料通道已超過 5 秒沒有新資料: " + *transportStatus);
+      Serial.print("資料通道已超過 5 秒沒有新資料: ");
+      Serial.println(*transportStatus);
     }
   }
 };
