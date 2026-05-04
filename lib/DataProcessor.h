@@ -47,7 +47,11 @@ private:
     lastSyncedDetail = d;
     statusEverSynced = true;
     // transport->name() 是 const literal，setup() 已寫入 *transportName 一次，不再重複配置
-    *transportStatus = String(stateLabel(s)) + " - " + d;
+    // 直接 += 串接避免 `String(label) + " - " + d` 產生的 2-3 個暫物件
+    String& target = *transportStatus;
+    target = stateLabel(s);
+    target += " - ";
+    target += d;
   }
 
 public:

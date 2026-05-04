@@ -20,7 +20,13 @@ public:
   bool begin() override {
     serial->begin(baudRate, SERIAL_8N1, rxPin, txPin);
     currentState = TRANSPORT_STATE_READY;
-    currentDetail = "UART fallback active (RX:" + String(rxPin) + ", TX:" + String(txPin) + ", " + String(baudRate) + "bps)";
+    currentDetail = "UART fallback active (RX:";
+    currentDetail += rxPin;
+    currentDetail += ", TX:";
+    currentDetail += txPin;
+    currentDetail += ", ";
+    currentDetail += baudRate;
+    currentDetail += "bps)";
     return true;
   }
 
