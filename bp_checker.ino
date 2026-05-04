@@ -53,7 +53,10 @@ void setup() {
   // 初始化串列埠監視器
   Serial.begin(115200);
   delay(1000); // 等待串列埠穩定
-  
+
+  // pinMode 提早設定，讓 reset button 在後續 WiFi 連線階段也能被偵測
+  pinMode(RESET_PIN, INPUT_PULLUP);
+
   // 初始化各個模組
   webHandler = new WebHandler(&server, &preferences, &recordManager,
                              &bpParser,
@@ -101,8 +104,6 @@ void setup() {
     wifiManager->connectToWiFi();
   }
 
-  pinMode(RESET_PIN, INPUT_PULLUP);
-  
   // 設置NTP時間同步，使用台北時區（GMT+8）
   configTime(8 * 3600, 0, "pool.ntp.org", "time.nist.gov");
   // 設置台北時區
