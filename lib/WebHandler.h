@@ -219,7 +219,19 @@ public:
   }
 
   void handleRoot() {
-    int n = WiFi.scanNetworks();
+    // WiFi.scanNetworks() 同步阻塞 ~5 秒；快取 20 秒避免每次 /config 都重掃。
+    // 顯式加 ?rescan=1 才強制重掃（重新掃描按鈕會帶這參數）。
+    static unsigned long lastScanMs = 0;
+    static int lastScanCount = -1;
+    bool forceRescan = (server->arg("rescan") == "1");
+    int n;
+    if (forceRescan || lastScanCount < 0 || millis() - lastScanMs > 20000) {
+      n = WiFi.scanNetworks();
+      lastScanCount = n;
+      lastScanMs = millis();
+    } else {
+      n = lastScanCount;
+    }
 
     String js = "<script>";
     js += "function toggleManualSSID(){";
@@ -267,7 +279,7 @@ public:
 
     html += "<div class='inline-actions'>";
     html += "<button class='btn' type='submit'>儲存並連接</button>";
-    html += "<a class='btn btn-secondary scan-refresh' href='/config'>重新掃描 WiFi</a>";
+    html += "<a class='btn btn-secondary scan-refresh' href='/config?rescan=1'>重新掃描 WiFi</a>";
     html += "</div>";
     html += "</form>";
 
