@@ -57,14 +57,13 @@ private:
 public:
   DataProcessor(BP_Parser* bpParser, BP_RecordManager* recordManager,
                 String* lastData,
-                String* transportName, String* transportStatus, MonitorTransport* transport) {
-    this->bpParser = bpParser;
-    this->recordManager = recordManager;
-    this->lastData = lastData;
-    this->transportName = transportName;
-    this->transportStatus = transportStatus;
-    this->transport = transport;
-  }
+                String* transportName, String* transportStatus, MonitorTransport* transport)
+    : bpParser(bpParser),
+      recordManager(recordManager),
+      lastData(lastData),
+      transportName(transportName),
+      transportStatus(transportStatus),
+      transport(transport) {}
 
   void setup() {
     bool ok = transport->begin();

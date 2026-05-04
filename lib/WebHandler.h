@@ -247,19 +247,18 @@ public:
   WebHandler(WebServer* server, Preferences* preferences, BP_RecordManager* recordManager,
              BP_Parser* bpParser,
              String* bp_model, String* lastData, String* transportName, String* transportStatus,
-             const char* hostname, const char* ap_ssid, const char* ap_password) {
-    this->server = server;
-    this->preferences = preferences;
-    this->recordManager = recordManager;
-    this->bpParser = bpParser;
-    this->bp_model = bp_model;
-    this->lastData = lastData;
-    this->transportName = transportName;
-    this->transportStatus = transportStatus;
-    this->hostname = hostname;
-    this->ap_ssid = ap_ssid;
-    this->ap_password = ap_password;
-  }
+             const char* hostname, const char* ap_ssid, const char* ap_password)
+    : server(server),
+      preferences(preferences),
+      recordManager(recordManager),
+      bpParser(bpParser),
+      bp_model(bp_model),
+      lastData(lastData),
+      transportName(transportName),
+      transportStatus(transportStatus),
+      hostname(hostname),
+      ap_ssid(ap_ssid),
+      ap_password(ap_password) {}
 
   void setupRoutes() {
     server->on("/", HTTP_GET, [this]() { this->handleMonitor(); });

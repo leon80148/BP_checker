@@ -24,16 +24,15 @@ private:
 
 public:
   WiFiManager(WebServer* server, Preferences* preferences,
-              const char* ap_ssid, const char* ap_password, const char* hostname) {
-    this->server = server;
-    this->preferences = preferences;
-    this->ap_ssid = ap_ssid;
-    this->ap_password = ap_password;
-    this->hostname = hostname;
-    this->serverStarted = false;
-    this->mdnsStarted = false;
-    this->wasConnected = false;
-  }
+              const char* ap_ssid, const char* ap_password, const char* hostname)
+    : server(server),
+      preferences(preferences),
+      ap_ssid(ap_ssid),
+      ap_password(ap_password),
+      hostname(hostname),
+      serverStarted(false),
+      mdnsStarted(false),
+      wasConnected(false) {}
 
   void loadCredentials() {
     preferences->begin("wifi-config", true); // read-only
