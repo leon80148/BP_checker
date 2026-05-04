@@ -119,39 +119,33 @@ public:
 
     // 用 hex lookup table 避免每 byte 建一次 String(uint8_t, HEX) 臨時物件
     static const char kHex[] = "0123456789abcdef";
-    String dataStr;
-    String asciiStr;
-    // ASCII 區塊保留一點額外空間給 HTML escape（< → &lt; 等放大 4 倍）
-    dataStr.reserve(byteCount * 4 + 64);
-    asciiStr.reserve(byteCount * 4 + 64);
-    dataStr = "<div class='data-section'><h3>原始數據 (十六進制):</h3><pre>";
-    asciiStr = "<div class='data-section'><h3>原始數據 (ASCII):</h3><pre>";
+    // 直接寫入 *lastData（取代 dataStr + asciiStr 兩個中介 String + 一次 concat）；
+    // 兩段都 inline 寫入後再 copy 給 parsedData.rawData
+    String& target = *lastData;
+    target = "";
+    target.reserve(byteCount * 8 + 128);
+    target += "<div class='data-section'><h3>原始數據 (十六進制):</h3><pre>";
     for (int i = 0; i < byteCount; i++) {
       uint8_t b = buffer[i];
-      dataStr += kHex[b >> 4];
-      dataStr += kHex[b & 0x0F];
-      dataStr += ' ';
-      // BP 機若回傳 '<' 等字元會被瀏覽器當 HTML 解析；做最小 escape
-      if (b < 32 || b > 126) {
-        asciiStr += '.';
-      } else if (b == '<') {
-        asciiStr += "&lt;";
-      } else if (b == '>') {
-        asciiStr += "&gt;";
-      } else if (b == '&') {
-        asciiStr += "&amp;";
-      } else {
-        asciiStr += (char)b;
-      }
-      if ((i + 1) % 16 == 0) {
-        dataStr += "<br>";
-        asciiStr += "<br>";
-      }
+      target += kHex[b >> 4];
+      target += kHex[b & 0x0F];
+      target += ' ';
+      if ((i + 1) % 16 == 0) target += "<br>";
     }
-    dataStr += "</pre></div>";
-    asciiStr += "</pre></div>";
-    *lastData = dataStr + asciiStr;
-    parsedData.rawData = *lastData;
+    target += "</pre></div>";
+    target += "<div class='data-section'><h3>原始數據 (ASCII):</h3><pre>";
+    for (int i = 0; i < byteCount; i++) {
+      uint8_t b = buffer[i];
+      // BP 機若回傳 '<' 等字元會被瀏覽器當 HTML 解析；做最小 escape
+      if (b < 32 || b > 126)      target += '.';
+      else if (b == '<')          target += "&lt;";
+      else if (b == '>')          target += "&gt;";
+      else if (b == '&')          target += "&amp;";
+      else                        target += (char)b;
+      if ((i + 1) % 16 == 0) target += "<br>";
+    }
+    target += "</pre></div>";
+    parsedData.rawData = target;
 
     // 取得台北時區時間
     struct tm timeinfo;
