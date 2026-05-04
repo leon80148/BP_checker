@@ -57,10 +57,6 @@ public:
   String detail() const override {
     return currentDetail;
   }
-
-  bool isFallback() const override {
-    return true;
-  }
 };
 
 #endif

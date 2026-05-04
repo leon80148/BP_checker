@@ -335,7 +335,3 @@ MonitorTransportState UsbCdcTransport::state() const {
 String UsbCdcTransport::detail() const {
   return impl->currentDetail;
 }
-
-bool UsbCdcTransport::isFallback() const {
-  return false;
-}

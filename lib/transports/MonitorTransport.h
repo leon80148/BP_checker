@@ -22,7 +22,6 @@ public:
   virtual const char* name() const = 0;
   virtual MonitorTransportState state() const = 0;
   virtual String detail() const = 0;
-  virtual bool isFallback() const = 0;
 };
 
 #endif
