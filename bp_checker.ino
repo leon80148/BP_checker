@@ -82,7 +82,9 @@ void setup() {
   
   // 從儲存中加載歷史記錄
   recordManager.loadFromStorage();
-  Serial.println("已加載 " + String(recordManager.getRecordCount()) + " 筆血壓記錄");
+  Serial.print("已加載 ");
+  Serial.print(recordManager.getRecordCount());
+  Serial.println(" 筆血壓記錄");
   
   // 設置網頁路由
   webHandler->setupRoutes();
