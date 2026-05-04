@@ -18,28 +18,34 @@ private:
   String* transportStatus;
   MonitorTransport* transport;
 
-  String stateLabel(MonitorTransportState state) {
+  // 上次同步的狀態快取，避免每 loop iteration 都重建 transportStatus String
+  MonitorTransportState lastSyncedState = TRANSPORT_STATE_STARTING;
+  String lastSyncedDetail;
+  bool statusEverSynced = false;
+
+  const char* stateLabel(MonitorTransportState state) {
     switch (state) {
-      case TRANSPORT_STATE_STARTING:
-        return "啟動中";
-      case TRANSPORT_STATE_WAITING_DEVICE:
-        return "等待裝置";
-      case TRANSPORT_STATE_READY:
-        return "就緒";
-      case TRANSPORT_STATE_RECEIVING:
-        return "接收中";
-      case TRANSPORT_STATE_UNSUPPORTED:
-        return "未就緒";
-      case TRANSPORT_STATE_ERROR:
-        return "錯誤";
-      default:
-        return "未知";
+      case TRANSPORT_STATE_STARTING:      return "啟動中";
+      case TRANSPORT_STATE_WAITING_DEVICE:return "等待裝置";
+      case TRANSPORT_STATE_READY:         return "就緒";
+      case TRANSPORT_STATE_RECEIVING:     return "接收中";
+      case TRANSPORT_STATE_UNSUPPORTED:   return "未就緒";
+      case TRANSPORT_STATE_ERROR:         return "錯誤";
+      default:                            return "未知";
     }
   }
 
   void syncTransportStatus() {
+    MonitorTransportState s = transport->state();
+    String d = transport->detail();
+    if (statusEverSynced && s == lastSyncedState && d == lastSyncedDetail) {
+      return; // 沒變化就跳過全部 String 重組
+    }
+    lastSyncedState = s;
+    lastSyncedDetail = d;
+    statusEverSynced = true;
     *transportName = String(transport->name());
-    *transportStatus = stateLabel(transport->state()) + " - " + transport->detail();
+    *transportStatus = String(stateLabel(s)) + " - " + d;
   }
 
 public:

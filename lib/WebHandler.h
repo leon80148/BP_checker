@@ -314,32 +314,40 @@ public:
     } else {
       new_ssid = server->arg("ssid");
     }
+    new_ssid.trim();
 
-    if (new_ssid.length() > 0) {
-      preferences->begin("wifi-config", false);
-      preferences->putString("ssid", new_ssid);
-      preferences->putString("password", new_password);
-      preferences->end();
-
-      String html = buildPageStart("設定完成", "/config");
-      html += "<section class='panel'>";
-      html += "<h2>WiFi 設定已儲存</h2>";
-      html += "<p class='helper-text'>設備將重新啟動並嘗試連接新 WiFi。若失敗，可長按 Reset 3 秒還原設定。</p>";
-      html += "<ul class='status-list'>";
-      html += "<li><span>目標 SSID</span><strong>" + new_ssid + "</strong></li>";
-      html += "<li><span>設備網址</span><strong>http://" + String(*hostname) + ".local</strong></li>";
-      html += "<li><span>備援 AP</span><strong>" + String(*ap_ssid) + "</strong></li>";
-      html += "</ul>";
-      html += "</section>";
-      html += buildPageEnd();
-
-      server->send(200, "text/html", html);
-
-      delay(2000);
-      ESP.restart();
-    } else {
-      server->send(400, "text/plain", "無效的WiFi設定");
+    // 802.11 SSID 上限 32 bytes；WPA2 password 上限 63 chars（open AP 可空）。
+    // 拒絕超出規格的輸入，避免存到 NVS 後依然連不上。
+    if (new_ssid.length() == 0 || new_ssid.length() > 32) {
+      server->send(400, "text/plain", "無效的WiFi設定（SSID 長度需 1-32）");
+      return;
     }
+    if (new_password.length() > 63) {
+      server->send(400, "text/plain", "無效的WiFi設定（密碼長度需 0-63）");
+      return;
+    }
+
+    preferences->begin("wifi-config", false);
+    preferences->putString("ssid", new_ssid);
+    preferences->putString("password", new_password);
+    preferences->end();
+
+    String html = buildPageStart("設定完成", "/config");
+    html += "<section class='panel'>";
+    html += "<h2>WiFi 設定已儲存</h2>";
+    html += "<p class='helper-text'>設備將重新啟動並嘗試連接新 WiFi。若失敗，可長按 Reset 3 秒還原設定。</p>";
+    html += "<ul class='status-list'>";
+    html += "<li><span>目標 SSID</span><strong>" + new_ssid + "</strong></li>";
+    html += "<li><span>設備網址</span><strong>http://" + String(*hostname) + ".local</strong></li>";
+    html += "<li><span>備援 AP</span><strong>" + String(*ap_ssid) + "</strong></li>";
+    html += "</ul>";
+    html += "</section>";
+    html += buildPageEnd();
+
+    server->send(200, "text/html", html);
+
+    delay(2000);
+    ESP.restart();
   }
 
   void handleBpModelPage() {
