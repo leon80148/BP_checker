@@ -150,8 +150,17 @@ static void cdcEventCallback(const cdc_acm_host_dev_event_data_t* event, void* u
 
   switch (event->type) {
     case CDC_ACM_HOST_ERROR:
+      // 不做 cleanup 的話會卡在 connected=true + state=ERROR 直到 disconnect。
+      // 主動 close handle 並把 connected 拉回 false，下次 poll() 會嘗試重連
+      // （deviceAttached 不清，因為裝置仍在 USB 匯流排上）。
       impl->currentState = TRANSPORT_STATE_ERROR;
       impl->currentDetail = "CDC error: " + String(event->data.error);
+      if (impl->cdcHandle != nullptr) {
+        cdc_acm_host_close(impl->cdcHandle);
+        impl->cdcHandle = nullptr;
+      }
+      impl->connected = false;
+      impl->lastOpenAttemptMs = 0; // 立即允許下次重連，不等 1s rate-limit
       break;
     case CDC_ACM_HOST_DEVICE_DISCONNECTED:
       impl->connected = false;
