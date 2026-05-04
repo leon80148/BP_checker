@@ -112,11 +112,16 @@ private:
   }
 
   String navLink(const String& href, const String& label, const String& activePath) {
-    String cls = "top-nav-link";
-    if (href == activePath) {
-      cls += " active";
-    }
-    return "<a class='" + cls + "' href='" + href + "'>" + label + "</a>";
+    String s;
+    s.reserve(80);
+    s += "<a class='top-nav-link";
+    if (href == activePath) s += " active";
+    s += "' href='";
+    s += href;
+    s += "'>";
+    s += label;
+    s += "</a>";
+    return s;
   }
 
   const String& sharedStyle() {
