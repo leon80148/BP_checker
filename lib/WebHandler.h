@@ -25,15 +25,15 @@ private:
   const char* ap_ssid;
   const char* ap_password;
 
-  bool isSystolicAbnormal(int value) {
+  bool isSystolicAbnormal(int value) const {
     return value > 130 || value < 90;
   }
 
-  bool isDiastolicAbnormal(int value) {
+  bool isDiastolicAbnormal(int value) const {
     return value > 80 || value < 50;
   }
 
-  bool isPulseAbnormal(int value) {
+  bool isPulseAbnormal(int value) const {
     return value > 100 || value < 60;
   }
 
@@ -61,7 +61,7 @@ private:
   }
 
   // 表格中單一欄位：對 invalid record 顯示 "—" 並用中性樣式，避免 -1 紅字
-  String renderTableValueCell(int value, bool valid, bool (WebHandler::*abnormalFn)(int)) {
+  String renderTableValueCell(int value, bool valid, bool (WebHandler::*abnormalFn)(int) const) {
     bool ok = valid && value > 0;
     if (!ok) return "<td class='value-na'>—</td>";
     bool bad = (this->*abnormalFn)(value);
