@@ -73,8 +73,8 @@ void setup() {
                                    &lastData, &transportActive, &lastTransportActivity,
                                    &transportName, &transportStatus, monitorTransport);
   
-  // 設置血壓解析器型號
-  preferences.begin("wifi-config", false);
+  // 設置血壓解析器型號（read-only 開啟，省 NVS 寫入準備工作）
+  preferences.begin("wifi-config", true);
   bp_model = preferences.getString("bp_model", "OMRON-HBP9030");
   preferences.end();
   bpParser.setModel(bp_model);
@@ -124,6 +124,7 @@ void loop() {
   wifiManager->tick();
 
   // 非阻塞 reset button：按住 3 秒才重置，避免誤觸卡 loop
+  // 只清 ssid/password，保留 bp_model 等其他設定（與 UI 標籤「重置 WiFi 設定」一致）
   static unsigned long resetPressStart = 0;
   if (digitalRead(RESET_PIN) == LOW) {
     if (resetPressStart == 0) {
@@ -131,7 +132,8 @@ void loop() {
     } else if (millis() - resetPressStart >= 3000) {
       Serial.println("重置WiFi設定...");
       preferences.begin("wifi-config", false);
-      preferences.clear();
+      preferences.remove("ssid");
+      preferences.remove("password");
       preferences.end();
       ESP.restart();
     }

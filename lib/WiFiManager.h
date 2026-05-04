@@ -36,7 +36,7 @@ public:
   }
 
   void loadCredentials() {
-    preferences->begin("wifi-config", false);
+    preferences->begin("wifi-config", true); // read-only
     sta_ssid = preferences->getString("ssid", "");
     sta_password = preferences->getString("password", "");
     preferences->end();

@@ -278,8 +278,10 @@ public:
     server->on("/raw_data", HTTP_GET, [this]() { this->handleRawData(); });
 
     server->on("/reset", HTTP_POST, [this]() {
+      // 只清 WiFi 相關 keys，保留 bp_model（與 UI 標籤一致）
       preferences->begin("wifi-config", false);
-      preferences->clear();
+      preferences->remove("ssid");
+      preferences->remove("password");
       preferences->end();
 
       String html = this->buildPageStart("重置完成", "/config", false, "<meta http-equiv='refresh' content='3;url=/'>");
