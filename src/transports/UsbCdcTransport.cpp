@@ -21,6 +21,9 @@ struct UsbCdcTransport::Impl {
   volatile bool driverReady = false;
   volatile bool openInProgress = false;
   volatile bool connected = false;
+  // 由 new_dev_cb 設成 true，DISCONNECTED event 設回 false。
+  // 沒裝置時跳過 cdc_acm_host_open（每次 ~150ms 阻塞），避免無謂 CPU 消耗。
+  volatile bool deviceAttached = false;
   bool beginCalled = false;
   bool daemonTaskStarted = false;
   unsigned long lastOpenAttemptMs = 0;
@@ -59,6 +62,7 @@ static void usbHostDaemonTask(void* arg) {
       if (gUsbCdcTransport == nullptr) {
         return;
       }
+      gUsbCdcTransport->impl->deviceAttached = true;
       gUsbCdcTransport->impl->currentState = TRANSPORT_STATE_WAITING_DEVICE;
       gUsbCdcTransport->impl->currentDetail = "USB device detected. Probing CDC interface.";
     },
@@ -151,6 +155,7 @@ static void cdcEventCallback(const cdc_acm_host_dev_event_data_t* event, void* u
       break;
     case CDC_ACM_HOST_DEVICE_DISCONNECTED:
       impl->connected = false;
+      impl->deviceAttached = false; // 等下次 new_dev_cb 才會重新 probe
       impl->currentState = TRANSPORT_STATE_WAITING_DEVICE;
       impl->currentDetail = "CDC device disconnected";
       if (impl->cdcHandle != nullptr) {
@@ -224,6 +229,11 @@ void UsbCdcTransport::poll() {
   return;
 #else
   if (!impl->beginCalled || !impl->hostReady || !impl->driverReady || impl->connected || impl->openInProgress) {
+    return;
+  }
+
+  // 沒收到 new_dev_cb 不要主動 probe，避免空轉時每秒一次 ~150ms 阻塞主迴圈
+  if (!impl->deviceAttached) {
     return;
   }
 
