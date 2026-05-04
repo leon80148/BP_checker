@@ -158,7 +158,13 @@ public:
       parsedData.timestamp = String("時間未同步");
     }
 
-    recordManager->addRecord(parsedData);
+    // 移轉 parsedData 進 ring buffer 省一次 ~700B rawData copy；
+    // 我們之後只讀 systolic/diastolic/pulse/valid 這些 trivial 欄位（move 後仍有效）
+    int sys = parsedData.systolic;
+    int dia = parsedData.diastolic;
+    int pul = parsedData.pulse;
+    bool ok = parsedData.valid;
+    recordManager->addRecord(std::move(parsedData));
 
     // Serial log 直接 print（內建 buffered IO），避免再配置兩個 String
     Serial.print("接收數據: ");
@@ -175,14 +181,14 @@ public:
       Serial.print((b >= 32 && b <= 126) ? (char)b : '.');
     }
     Serial.println();
-    if (parsedData.valid) {
+    if (ok) {
       // 直接 print 避免建 5 個 String 暫物件
       Serial.print("解析結果: SYS=");
-      Serial.print(parsedData.systolic);
+      Serial.print(sys);
       Serial.print(" DIA=");
-      Serial.print(parsedData.diastolic);
+      Serial.print(dia);
       Serial.print(" PUL=");
-      Serial.println(parsedData.pulse);
+      Serial.println(pul);
     } else {
       Serial.println("無法解析為有效的血壓數據，但已儲存原始數據");
     }

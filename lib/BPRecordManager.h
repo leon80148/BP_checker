@@ -105,9 +105,11 @@ public:
     delete[] _records;
   }
 
-  void addRecord(const BPData& record) {
+  // by-value 收參數讓 caller 可決定 copy（lvalue）或 move（std::move(rvalue)）。
+  // 呼叫端用 std::move 時可省下一次 ~700B 的 rawData String 複製。
+  void addRecord(BPData record) {
     int slot = _historyIndex;
-    _records[slot] = record;
+    _records[slot] = std::move(record);
     _historyIndex = (_historyIndex + 1) % _maxRecords;
     if (_recordCount < _maxRecords) _recordCount++;
     saveSlot(slot);
