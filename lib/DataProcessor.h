@@ -81,9 +81,6 @@ public:
       return false;
     }
 
-    *lastTransportActivity = millis();
-    *transportActive = true;
-
     // 用 inter-byte timeout 模式讀取，兼顧 UART（bytes 1ms 間隔）與 USB CDC（爆量到達）。
     // 比起原本每 byte 都 delay(2)，最多只在 byte 間 idle 等候 30ms，避免單次接收阻塞 webserver 200ms。
     static constexpr int kBufferSize = 100;
@@ -104,8 +101,12 @@ public:
     }
 
     if (byteCount == 0) {
-      return false;
+      return false; // 不更新 transportActive：實際沒讀到資料
     }
+
+    // 確認真的讀到 byte 後才標記活動
+    *lastTransportActivity = millis();
+    *transportActive = true;
 
     // 解析血壓數據（在組 HTML 之前先做，避免無資料時還浪費字串組裝）
     BPData parsedData = bpParser->parse(buffer, byteCount);
