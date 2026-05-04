@@ -75,55 +75,51 @@ private:
     out += "</td>";
   }
 
-  // KPI 卡片：valueOk=false 顯示 "—" + 中性 pill，避免 -1 之類無效數值被誤判為異常
-  String renderKpiCard(const char* idVal, const char* idPill,
-                       const char* label, const char* unit,
-                       int value, bool valueOk, bool bad) const {
-    String html;
-    html.reserve(320);
-    html += "<article class='kpi-card'>";
-    html += "<div class='kpi-label'><span>";
-    html += label;
-    html += "</span><span>";
-    html += unit;
-    html += "</span></div>";
-    html += "<div id='";
-    html += idVal;
+  // KPI 卡片：valueOk=false 顯示 "—" + 中性 pill，避免 -1 之類無效數值被誤判為異常。
+  // 直接 append 進 out，省每次呼叫一個 ~320B 的中介 String（dashboard 一次 render 3 次）
+  void renderKpiCard(String& out, const char* idVal, const char* idPill,
+                     const char* label, const char* unit,
+                     int value, bool valueOk, bool bad) const {
+    out += "<article class='kpi-card'>";
+    out += "<div class='kpi-label'><span>";
+    out += label;
+    out += "</span><span>";
+    out += unit;
+    out += "</span></div>";
+    out += "<div id='";
+    out += idVal;
     if (!valueOk) {
-      html += "' class='kpi-value value-na'>—</div>";
+      out += "' class='kpi-value value-na'>—</div>";
     } else {
-      html += "' class='kpi-value ";
-      html += valueClass(bad);
-      html += "'>";
-      html += value; // 直接 += int，免 String(value) 暫物件
-      html += "</div>";
+      out += "' class='kpi-value ";
+      out += valueClass(bad);
+      out += "'>";
+      out += value; // 直接 += int，免 String(value) 暫物件
+      out += "</div>";
     }
-    html += "<span id='";
-    html += idPill;
+    out += "<span id='";
+    out += idPill;
     if (!valueOk) {
-      html += "' class='state-pill state-na'>未解析</span>";
+      out += "' class='state-pill state-na'>未解析</span>";
     } else {
-      html += "' class='state-pill ";
-      html += bad ? "state-alert" : "state-ok";
-      html += "'>";
-      html += bad ? "異常" : "正常";
-      html += "</span>";
+      out += "' class='state-pill ";
+      out += bad ? "state-alert" : "state-ok";
+      out += "'>";
+      out += bad ? "異常" : "正常";
+      out += "</span>";
     }
-    html += "</article>";
-    return html;
+    out += "</article>";
   }
 
-  String navLink(const String& href, const String& label, const String& activePath) const {
-    String s;
-    s.reserve(80);
-    s += "<a class='top-nav-link";
-    if (href == activePath) s += " active";
-    s += "' href='";
-    s += href;
-    s += "'>";
-    s += label;
-    s += "</a>";
-    return s;
+  // 直接 append 進 out，省每次呼叫一個 ~80B 的中介 String（buildPageStart 4 次 / 渲染）
+  void navLink(String& out, const String& href, const String& label, const String& activePath) const {
+    out += "<a class='top-nav-link";
+    if (href == activePath) out += " active";
+    out += "' href='";
+    out += href;
+    out += "'>";
+    out += label;
+    out += "</a>";
   }
 
   const String& sharedStyle() const {
@@ -232,10 +228,10 @@ private:
     html += "<span class='chip'>Health Monitor</span>";
     html += "</header>";
     html += "<nav class='top-nav'>";
-    html += navLink("/", "監控", activePath);
-    html += navLink("/history", "歷史記錄", activePath);
-    html += navLink("/config", "WiFi 設定", activePath);
-    html += navLink("/bp_model", "型號設定", activePath);
+    navLink(html, "/", "監控", activePath);
+    navLink(html, "/history", "歷史記錄", activePath);
+    navLink(html, "/config", "WiFi 設定", activePath);
+    navLink(html, "/bp_model", "型號設定", activePath);
     html += "</nav>";
     return html;
   }
@@ -523,9 +519,9 @@ private:
       html += "（每 3 秒刷新）</span></div>";
       html += "<div class='kpi-grid'>";
 
-      html += renderKpiCard("kpi-sys", "pill-sys", "收縮壓", "mmHg", latest.systolic, sysOk, sysBad);
-      html += renderKpiCard("kpi-dia", "pill-dia", "舒張壓", "mmHg", latest.diastolic, diaOk, diaBad);
-      html += renderKpiCard("kpi-pul", "pill-pul", "脈搏",   "bpm",  latest.pulse,    pulOk, pulBad);
+      renderKpiCard(html, "kpi-sys", "pill-sys", "收縮壓", "mmHg", latest.systolic, sysOk, sysBad);
+      renderKpiCard(html, "kpi-dia", "pill-dia", "舒張壓", "mmHg", latest.diastolic, diaOk, diaBad);
+      renderKpiCard(html, "kpi-pul", "pill-pul", "脈搏",   "bpm",  latest.pulse,    pulOk, pulBad);
 
       html += "</div></section>";
 
