@@ -296,7 +296,7 @@ public:
       html += "<p class='helper-text'>裝置將重新啟動並回到 AP 設定模式，請重新連線設定。</p>";
       html += "</section>";
       html += this->buildPageEnd();
-      server->send(200, "text/html", html);
+      server->send(200, "text/html; charset=UTF-8", html);
 
       delay(1000);
       ESP.restart();
@@ -391,7 +391,7 @@ private:
     html += "</section>";
     html += buildPageEnd();
 
-    server->send(200, "text/html", html);
+    server->send(200, "text/html; charset=UTF-8", html);
   }
 
   void handleConfigure() {
@@ -439,7 +439,7 @@ private:
     html += "</section>";
     html += buildPageEnd();
 
-    server->send(200, "text/html", html);
+    server->send(200, "text/html; charset=UTF-8", html);
 
     delay(2000);
     ESP.restart();
@@ -469,7 +469,7 @@ private:
     html += "</section>";
     html += buildPageEnd();
 
-    server->send(200, "text/html", html);
+    server->send(200, "text/html; charset=UTF-8", html);
   }
 
   void handleSetBpModel() {
@@ -490,7 +490,7 @@ private:
       html += "</section>";
       html += buildPageEnd();
 
-      server->send(200, "text/html", html);
+      server->send(200, "text/html; charset=UTF-8", html);
     } else {
       server->send(400, "text/plain; charset=UTF-8", "無效的型號設定");
     }
@@ -648,7 +648,7 @@ private:
     );
 
     html += buildPageEnd();
-    server->send(200, "text/html", html);
+    server->send(200, "text/html; charset=UTF-8", html);
   }
 
   void handleHistory() {
@@ -701,7 +701,7 @@ private:
     html += "</section>";
 
     html += buildPageEnd();
-    server->send(200, "text/html", html);
+    server->send(200, "text/html; charset=UTF-8", html);
   }
 
   void handleHistoryAPI() {
@@ -767,7 +767,7 @@ private:
     html += "</section>";
     html += buildPageEnd();
 
-    server->send(200, "text/html", html);
+    server->send(200, "text/html; charset=UTF-8", html);
   }
 
   void handleRawData() {
@@ -785,8 +785,7 @@ private:
         html += "</section>";
         html += buildPageEnd();
 
-        server->sendHeader("Content-Type", "text/html; charset=UTF-8");
-        server->send(200, "text/html", html);
+        server->send(200, "text/html; charset=UTF-8", html);
       } else {
         server->send(404, "text/plain; charset=UTF-8", "找不到該記錄");
       }
