@@ -125,7 +125,7 @@ private:
   const String& sharedStyle() const {
     static String css; // 函式 local 靜態，與 instance const 性無關
     if (!css.isEmpty()) return css;
-    css.reserve(4500);
+    css.reserve(5200); // 量測實際 CSS ~5025 bytes，4500 會觸發一次 realloc
     css += "<style>";
     css += ":root{";
     css += "--bg:#edf3fb;";
