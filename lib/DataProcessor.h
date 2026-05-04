@@ -176,9 +176,13 @@ public:
     }
     Serial.println();
     if (parsedData.valid) {
-      Serial.println("解析結果: SYS=" + String(parsedData.systolic) +
-                     " DIA=" + String(parsedData.diastolic) +
-                     " PUL=" + String(parsedData.pulse));
+      // 直接 print 避免建 5 個 String 暫物件
+      Serial.print("解析結果: SYS=");
+      Serial.print(parsedData.systolic);
+      Serial.print(" DIA=");
+      Serial.print(parsedData.diastolic);
+      Serial.print(" PUL=");
+      Serial.println(parsedData.pulse);
     } else {
       Serial.println("無法解析為有效的血壓數據，但已儲存原始數據");
     }
