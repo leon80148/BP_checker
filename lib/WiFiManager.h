@@ -23,6 +23,7 @@ private:
   bool apMode;
   bool serverStarted;
   bool mdnsStarted;
+  bool wasConnected;
 
 public:
   WiFiManager(WebServer* server, Preferences* preferences,
@@ -35,6 +36,7 @@ public:
     this->apMode = false;
     this->serverStarted = false;
     this->mdnsStarted = false;
+    this->wasConnected = false;
     this->webHandler = nullptr;
   }
 
@@ -101,27 +103,37 @@ public:
     }
   }
 
-  // 主 loop 持續呼叫；偵測 STA 連線狀態變化並啟動 mDNS。
+  // 主 loop 持續呼叫；偵測 STA 連線狀態邊緣（disconnect→connect）以重新註冊 mDNS。
   void tick() {
-    if (mdnsStarted) return;
-    if (WiFi.status() != WL_CONNECTED) return;
+    bool nowConnected = (WiFi.status() == WL_CONNECTED);
+    if (nowConnected == wasConnected) return; // 沒邊緣
 
-    Serial.println("已連接到WiFi");
-    Serial.print("IP地址: ");
-    Serial.println(WiFi.localIP());
+    if (nowConnected) {
+      Serial.println("WiFi 連線就緒");
+      Serial.print("IP地址: ");
+      Serial.println(WiFi.localIP());
 
-    if (MDNS.begin(hostname)) {
-      Serial.println("mDNS已啟動，可通過 http://" + String(hostname) + ".local 訪問");
+      if (mdnsStarted) {
+        MDNS.end();
+      }
+      if (MDNS.begin(hostname)) {
+        Serial.println("mDNS已啟動，可通過 http://" + String(hostname) + ".local 訪問");
+        mdnsStarted = true;
+      } else {
+        Serial.println("mDNS服務啟動失敗");
+        mdnsStarted = false;
+      }
+
+      Serial.println("\n===== ESP32 血壓機 WiFi 轉發器 =====");
+      Serial.println("設備名稱: ESP32_BP_Monitor");
+      Serial.print("WiFi IP 地址: ");
+      Serial.println(WiFi.localIP());
+      Serial.println("等待數據中...");
     } else {
-      Serial.println("mDNS服務啟動失敗");
+      Serial.println("WiFi STA 已斷線，背景重連中（AP/webserver 仍可用）");
+      // 不立即 MDNS.end()；重連時會 end+begin
     }
-    mdnsStarted = true;
-
-    Serial.println("\n===== ESP32 血壓機 WiFi 轉發器 =====");
-    Serial.println("設備名稱: ESP32_BP_Monitor");
-    Serial.print("WiFi IP 地址: ");
-    Serial.println(WiFi.localIP());
-    Serial.println("等待數據中...");
+    wasConnected = nowConnected;
   }
 
   String getStaSsid() { return sta_ssid; }
