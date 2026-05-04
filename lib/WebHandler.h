@@ -376,8 +376,12 @@ public:
       html += "<h3>目前連線狀態</h3>";
       html += "<ul class='status-list'>";
       html += "<li><span>狀態</span><strong>已連接</strong></li>";
-      html += "<li><span>IP 位址</span><strong>" + WiFi.localIP().toString() + "</strong></li>";
-      html += "<li><span>瀏覽器存取</span><strong>http://" + String(*hostname) + ".local</strong></li>";
+      html += "<li><span>IP 位址</span><strong>";
+      html += WiFi.localIP().toString();
+      html += "</strong></li>";
+      html += "<li><span>瀏覽器存取</span><strong>http://";
+      html += *hostname;
+      html += ".local</strong></li>";
       html += "</ul></div>";
     }
 
@@ -419,9 +423,15 @@ public:
     html += "<h2>WiFi 設定已儲存</h2>";
     html += "<p class='helper-text'>設備將重新啟動並嘗試連接新 WiFi。若失敗，可長按 Reset 3 秒還原設定。</p>";
     html += "<ul class='status-list'>";
-    html += "<li><span>目標 SSID</span><strong>" + htmlEscape(new_ssid) + "</strong></li>";
-    html += "<li><span>設備網址</span><strong>http://" + String(*hostname) + ".local</strong></li>";
-    html += "<li><span>備援 AP</span><strong>" + String(*ap_ssid) + "</strong></li>";
+    html += "<li><span>目標 SSID</span><strong>";
+    html += htmlEscape(new_ssid);
+    html += "</strong></li>";
+    html += "<li><span>設備網址</span><strong>http://";
+    html += *hostname;
+    html += ".local</strong></li>";
+    html += "<li><span>備援 AP</span><strong>";
+    html += *ap_ssid;
+    html += "</strong></li>";
     html += "</ul>";
     html += "</section>";
     html += buildPageEnd();
