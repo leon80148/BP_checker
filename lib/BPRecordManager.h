@@ -148,7 +148,10 @@ public:
       // 新格式：直接以物理 slot 對應 _records[i]
       _recordCount = storedCount;
       _historyIndex = storedIndex;
-      for (int i = 0; i < _maxRecords; i++) {
+      // count < max 表示 ring buffer 還沒環繞，只有 slot[0..count-1] 有資料；
+      // count == max 已環繞，需讀全部 slot。
+      int slotsToRead = (storedCount < _maxRecords) ? storedCount : _maxRecords;
+      for (int i = 0; i < slotsToRead; i++) {
         String key = "slot_" + String(i);
         String recData = _preferences.getString(key.c_str(), "");
         parseRecord(recData, _records[i]); // 失敗則維持 default
