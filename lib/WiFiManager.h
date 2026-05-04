@@ -5,13 +5,11 @@
 #include <WebServer.h>
 #include <Preferences.h>
 #include <ESPmDNS.h>
-#include "WebHandler.h"
 
 class WiFiManager {
 private:
   WebServer* server;
   Preferences* preferences;
-  WebHandler* webHandler;
 
   const char* ap_ssid;
   const char* ap_password;
@@ -20,7 +18,6 @@ private:
   String sta_ssid;
   String sta_password;
 
-  bool apMode;
   bool serverStarted;
   bool mdnsStarted;
   bool wasConnected;
@@ -33,15 +30,9 @@ public:
     this->ap_ssid = ap_ssid;
     this->ap_password = ap_password;
     this->hostname = hostname;
-    this->apMode = false;
     this->serverStarted = false;
     this->mdnsStarted = false;
     this->wasConnected = false;
-    this->webHandler = nullptr;
-  }
-
-  void setWebHandler(WebHandler* webHandler) {
-    this->webHandler = webHandler;
   }
 
   void loadCredentials() {
@@ -56,7 +47,6 @@ public:
   }
 
   void startAPMode() {
-    apMode = true;
     Serial.println("進入AP模式設定...");
 
     WiFi.mode(WIFI_AP);
@@ -135,10 +125,6 @@ public:
     }
     wasConnected = nowConnected;
   }
-
-  String getStaSsid() { return sta_ssid; }
-  String getStaPassword() { return sta_password; }
-  bool isApMode() { return apMode; }
 
 private:
   void startServerOnce() {

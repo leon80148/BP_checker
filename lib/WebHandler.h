@@ -35,14 +35,9 @@ private:
     return value > 100 || value < 60;
   }
 
-  String valueClass(bool abnormal) {
+  // 回傳 string literal 不配置 String；renderTableValueCell/renderKpiCard 都是 += 用法
+  const char* valueClass(bool abnormal) {
     return abnormal ? "value-bad" : "value-good";
-  }
-
-  String statePill(bool abnormal) {
-    return abnormal
-      ? "<span class='state-pill state-alert'>異常</span>"
-      : "<span class='state-pill state-ok'>正常</span>";
   }
 
   // 表格中單一欄位：對 invalid record 顯示 "—" 並用中性樣式，避免 -1 紅字
