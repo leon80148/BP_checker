@@ -27,11 +27,18 @@ private:
   String _namespace = "bp_records";
 
   String serializeRecord(const BPData& r) const {
-    return r.timestamp + "|" +
-           String(r.systolic) + "|" +
-           String(r.diastolic) + "|" +
-           String(r.pulse) + "|" +
-           String(r.valid ? 1 : 0);
+    String s;
+    s.reserve(r.timestamp.length() + 24); // ts + 4 ints + 4 separators
+    s += r.timestamp;
+    s += '|';
+    s += r.systolic;
+    s += '|';
+    s += r.diastolic;
+    s += '|';
+    s += r.pulse;
+    s += '|';
+    s += (r.valid ? '1' : '0');
+    return s;
   }
 
   bool parseRecord(const String& recData, BPData& out) const {
@@ -62,8 +69,9 @@ private:
   void saveSlot(int slot) {
     _preferences.begin(_namespace.c_str(), false);
     String recData = serializeRecord(_records[slot]);
-    String key = "slot_" + String(slot);
-    _preferences.putString(key.c_str(), recData);
+    char key[12];
+    snprintf(key, sizeof(key), "slot_%d", slot);
+    _preferences.putString(key, recData);
     _preferences.putInt("count", _recordCount);
     _preferences.putInt("index", _historyIndex);
     _preferences.putString("schema", "v2");
@@ -74,10 +82,11 @@ private:
   void saveAllSlots() {
     if (_recordCount <= 0) return;
     _preferences.begin(_namespace.c_str(), false);
+    char key[12];
     for (int i = 0; i < _recordCount; i++) {
       String recData = serializeRecord(_records[i]);
-      String key = "slot_" + String(i);
-      _preferences.putString(key.c_str(), recData);
+      snprintf(key, sizeof(key), "slot_%d", i);
+      _preferences.putString(key, recData);
     }
     _preferences.putInt("count", _recordCount);
     _preferences.putInt("index", _historyIndex);
@@ -151,18 +160,20 @@ public:
       // count < max 表示 ring buffer 還沒環繞，只有 slot[0..count-1] 有資料；
       // count == max 已環繞，需讀全部 slot。
       int slotsToRead = (storedCount < _maxRecords) ? storedCount : _maxRecords;
+      char key[12];
       for (int i = 0; i < slotsToRead; i++) {
-        String key = "slot_" + String(i);
-        String recData = _preferences.getString(key.c_str(), "");
+        snprintf(key, sizeof(key), "slot_%d", i);
+        String recData = _preferences.getString(key, "");
         parseRecord(recData, _records[i]); // 失敗則維持 default
       }
       _preferences.end();
     } else {
       // 舊格式 rec_0=newest..rec_(count-1)=oldest；放到 _records[count-1-i]
       _recordCount = storedCount;
+      char key[12];
       for (int i = 0; i < _recordCount; i++) {
-        String key = "rec_" + String(i);
-        String recData = _preferences.getString(key.c_str(), "");
+        snprintf(key, sizeof(key), "rec_%d", i);
+        String recData = _preferences.getString(key, "");
         if (recData.length() == 0) continue;
         int slot = _recordCount - 1 - i;
         parseRecord(recData, _records[slot]);
