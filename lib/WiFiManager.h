@@ -50,7 +50,9 @@ public:
     Serial.println("進入AP模式設定...");
 
     WiFi.mode(WIFI_AP);
-    WiFi.softAP(ap_ssid, ap_password);
+    if (!WiFi.softAP(ap_ssid, ap_password)) {
+      Serial.println("[ERROR] WiFi.softAP 失敗：AP 可能無法被連到");
+    }
 
     IPAddress myIP = WiFi.softAPIP();
     Serial.print("AP IP地址: ");
@@ -68,7 +70,9 @@ public:
   void connectToWiFi() {
     Serial.println("嘗試連接到WiFi（背景）...");
     WiFi.mode(WIFI_AP_STA);
-    WiFi.softAP(ap_ssid, ap_password);
+    if (!WiFi.softAP(ap_ssid, ap_password)) {
+      Serial.println("[ERROR] WiFi.softAP 失敗：AP 備援可能無法被連到");
+    }
     IPAddress apIP = WiFi.softAPIP();
     Serial.print("AP IP地址: ");
     Serial.println(apIP);
