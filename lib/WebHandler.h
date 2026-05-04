@@ -401,11 +401,11 @@ public:
     // 802.11 SSID 上限 32 bytes；WPA2 password 上限 63 chars（open AP 可空）。
     // 拒絕超出規格的輸入，避免存到 NVS 後依然連不上。
     if (new_ssid.length() == 0 || new_ssid.length() > 32) {
-      server->send(400, "text/plain", "無效的WiFi設定（SSID 長度需 1-32）");
+      server->send(400, "text/plain; charset=UTF-8", "無效的WiFi設定（SSID 長度需 1-32）");
       return;
     }
     if (new_password.length() > 63) {
-      server->send(400, "text/plain", "無效的WiFi設定（密碼長度需 0-63）");
+      server->send(400, "text/plain; charset=UTF-8", "無效的WiFi設定（密碼長度需 0-63）");
       return;
     }
 
@@ -479,7 +479,7 @@ public:
 
       server->send(200, "text/html", html);
     } else {
-      server->send(400, "text/plain", "無效的型號設定");
+      server->send(400, "text/plain; charset=UTF-8", "無效的型號設定");
     }
   }
 
@@ -754,10 +754,10 @@ public:
         server->sendHeader("Content-Type", "text/html; charset=UTF-8");
         server->send(200, "text/html", html);
       } else {
-        server->send(404, "text/plain", "找不到該記錄");
+        server->send(404, "text/plain; charset=UTF-8", "找不到該記錄");
       }
     } else {
-      server->send(400, "text/plain", "缺少記錄ID");
+      server->send(400, "text/plain; charset=UTF-8", "缺少記錄ID");
     }
   }
 };
