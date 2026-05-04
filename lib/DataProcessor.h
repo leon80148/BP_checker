@@ -157,9 +157,9 @@ public:
     if (getLocalTime(&timeinfo)) {
       char timeStr[32];
       strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", &timeinfo);
-      parsedData.timestamp = String(timeStr);
+      parsedData.timestamp = timeStr; // const char* assign，免 String temp
     } else {
-      parsedData.timestamp = String("時間未同步");
+      parsedData.timestamp = "時間未同步";
     }
 
     // 移轉 parsedData 進 ring buffer 省一次 ~700B rawData copy；
