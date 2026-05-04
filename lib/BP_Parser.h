@@ -61,113 +61,85 @@ public:
   }
 
 private:
-  // OMRON HBP-9030 解析邏輯
+  // OMRON HBP-9030 解析邏輯：CSV 格式，第 7/8/9 欄為 SYS/DIA/PUL（0-indexed）
   BPData parseOmronHBP9030(uint8_t* buffer, int length) {
     BPData result;
-    result.systolic = -1;
-    result.diastolic = -1;
-    result.pulse = -1;
-    
-    // 將數據轉換為字串並以逗號分割
-    String dataStr = "";
-    for(int i = 0; i < length; i++) {
-      dataStr += (char)buffer[i];
-    }
-    
-    // 分割字串
-    int values[10] = {0}; // 用於存儲分割後的數值
+
+    // 一次 memcpy 取代逐 byte append（避免 log(n) 次 String 重新配置）
+    String dataStr;
+    dataStr.reserve(length + 1);
+    dataStr.concat(reinterpret_cast<const char*>(buffer), length);
+
+    int values[10] = {0};
     int valueIndex = 0;
     int startPos = 0;
-    
-    // 解析逗號分隔的數據
-    for(int i = 0; i < dataStr.length(); i++) {
-      if(dataStr.charAt(i) == ',' || i == dataStr.length() - 1) {
-        int endPos = (i == dataStr.length() - 1 && dataStr.charAt(i) != ',') ? i + 1 : i;
+    int len = dataStr.length();
+
+    for (int i = 0; i < len; i++) {
+      bool isLast = (i == len - 1);
+      bool isComma = (dataStr.charAt(i) == ',');
+      if (isComma || isLast) {
+        int endPos = (isLast && !isComma) ? i + 1 : i;
         String value = dataStr.substring(startPos, endPos);
         value.trim();
-        if(valueIndex < 10) {
+        if (valueIndex < 10) {
           values[valueIndex] = value.toInt();
         }
         valueIndex++;
         startPos = i + 1;
       }
     }
-    
-    // 根據Python程式的格式，收縮壓在第7位，舒張壓在第8位，脈搏在第9位
-    if(valueIndex >= 10) {
+
+    if (valueIndex >= 10) {
       result.systolic = values[7];
       result.diastolic = values[8];
       result.pulse = values[9];
     }
-    
     return result;
   }
 
   // OMRON HBP-1300 解析邏輯
   BPData parseOmronHBP1300(uint8_t* buffer, int length) {
     BPData result;
-    result.systolic = -1;
-    result.diastolic = -1;
-    result.pulse = -1;
-    
-    // OMRON HBP-1300 數據格式可能不同，這裡僅為示例
-    // 實際需要根據實際協議調整
     if (length >= 10 && buffer[0] == 0x01) {
       result.systolic = buffer[2] * 256 + buffer[3];
       result.diastolic = buffer[4] * 256 + buffer[5];
       result.pulse = buffer[6] * 256 + buffer[7];
     }
-    
     return result;
   }
 
-  // OMRON HEM-7121 解析邏輯
+  // OMRON HEM-7121 解析邏輯（示意實作）
   BPData parseOmronHEM7121(uint8_t* buffer, int length) {
     BPData result;
-    result.systolic = -1;
-    result.diastolic = -1;
-    result.pulse = -1;
-    
-    // 實際需要根據實際協議調整
     if (length >= 10) {
-      // 這裡只是示例
       result.systolic = buffer[3];
       result.diastolic = buffer[5];
       result.pulse = buffer[7];
     }
-    
     return result;
   }
 
-  // TERUMO ES-P2020 解析邏輯
+  // TERUMO ES-P2020 解析邏輯（示意實作）
   BPData parseTerumoESP2020(uint8_t* buffer, int length) {
     BPData result;
-    result.systolic = -1;
-    result.diastolic = -1;
-    result.pulse = -1;
-    
-    // 實際需要根據實際協議調整
     if (length >= 8) {
-      // 這裡只是示例
       result.systolic = buffer[2] * 10 + buffer[3];
       result.diastolic = buffer[4] * 10 + buffer[5];
       result.pulse = buffer[6] * 10 + buffer[7];
     }
-    
     return result;
   }
 
   // 通用解析邏輯 - 嘗試尋找ASCII格式的數據或其他常見格式
   BPData parseGeneric(uint8_t* buffer, int length) {
     BPData result;
-    result.systolic = -1;
-    result.diastolic = -1;
-    result.pulse = -1;
-    
-    // 轉換成ASCII字符串
-    String dataStr = "";
+
+    // 過濾出可列印 ASCII；先 reserve length 避免逐字 append 重新配置
+    String dataStr;
+    dataStr.reserve(length);
     for (int i = 0; i < length; i++) {
-      if (buffer[i] >= 32 && buffer[i] <= 126) { // 可列印ASCII字符
+      if (buffer[i] >= 32 && buffer[i] <= 126) {
         dataStr += (char)buffer[i];
       }
     }

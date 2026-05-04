@@ -110,7 +110,8 @@ public:
     // 解析血壓數據（在組 HTML 之前先做，避免無資料時還浪費字串組裝）
     BPData parsedData = bpParser->parse(buffer, byteCount);
 
-    // 一次組好 HTML，預先 reserve 容量以減少 String 重新配置
+    // 用 hex lookup table 避免每 byte 建一次 String(uint8_t, HEX) 臨時物件
+    static const char kHex[] = "0123456789abcdef";
     String dataStr;
     String asciiStr;
     dataStr.reserve(byteCount * 4 + 64);
@@ -119,8 +120,8 @@ public:
     asciiStr = "<div class='data-section'><h3>原始數據 (ASCII):</h3><pre>";
     for (int i = 0; i < byteCount; i++) {
       uint8_t b = buffer[i];
-      if (b < 0x10) dataStr += '0';
-      dataStr += String(b, HEX);
+      dataStr += kHex[b >> 4];
+      dataStr += kHex[b & 0x0F];
       dataStr += ' ';
       asciiStr += (b >= 32 && b <= 126) ? (char)b : '.';
       if ((i + 1) % 16 == 0) {
@@ -145,20 +146,21 @@ public:
 
     recordManager->addRecord(parsedData);
 
-    // Serial log（除錯用，組單行字串只 print 一次）
-    String hexLine;
-    String asciiLine;
-    hexLine.reserve(byteCount * 3);
-    asciiLine.reserve(byteCount);
+    // Serial log 直接 print（內建 buffered IO），避免再配置兩個 String
+    Serial.print("接收數據: ");
     for (int i = 0; i < byteCount; i++) {
       uint8_t b = buffer[i];
-      if (b < 0x10) hexLine += '0';
-      hexLine += String(b, HEX);
-      hexLine += ' ';
-      asciiLine += (b >= 32 && b <= 126) ? (char)b : '.';
+      Serial.print(kHex[b >> 4]);
+      Serial.print(kHex[b & 0x0F]);
+      Serial.print(' ');
     }
-    Serial.println("接收數據: " + hexLine);
-    Serial.println("ASCII數據: " + asciiLine);
+    Serial.println();
+    Serial.print("ASCII數據: ");
+    for (int i = 0; i < byteCount; i++) {
+      uint8_t b = buffer[i];
+      Serial.print((b >= 32 && b <= 126) ? (char)b : '.');
+    }
+    Serial.println();
     if (parsedData.valid) {
       Serial.println("解析結果: SYS=" + String(parsedData.systolic) +
                      " DIA=" + String(parsedData.diastolic) +
