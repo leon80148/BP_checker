@@ -68,7 +68,7 @@ private:
     s += "<td class='";
     s += valueClass(bad);
     s += "'>";
-    s += String(value);
+    s += value; // int append 用 String 內建 overload，免 String(value) 暫物件
     s += "</td>";
     return s;
   }
@@ -93,7 +93,7 @@ private:
       html += "' class='kpi-value ";
       html += valueClass(bad);
       html += "'>";
-      html += String(value);
+      html += value; // 直接 += int，免 String(value) 暫物件
       html += "</div>";
     }
     html += "<span id='";

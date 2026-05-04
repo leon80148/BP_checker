@@ -68,7 +68,7 @@ public:
 
   void setup() {
     bool ok = transport->begin();
-    *transportName = String(transport->name()); // const literal，僅在 setup 寫一次
+    *transportName = transport->name(); // const literal，僅在 setup 寫一次
     syncTransportStatus();
     Serial.println("與電腦通訊: 115200 bps");
     Serial.println("血壓機資料通道: " + *transportName);

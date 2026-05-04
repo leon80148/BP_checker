@@ -276,7 +276,8 @@ void UsbCdcTransport::poll() {
       impl->cdcHandle = handle;
       impl->connected = true;
       impl->currentState = TRANSPORT_STATE_READY;
-      impl->currentDetail = "CDC device opened on interface " + String(interfaceIndex);
+      impl->currentDetail = "CDC device opened on interface ";
+      impl->currentDetail += interfaceIndex;
 
       cdc_acm_line_coding_t lineCoding = {
         .dwDTERate = 9600,
