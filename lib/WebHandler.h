@@ -440,8 +440,12 @@ public:
     html += "<form method='post' action='/set_bp_model'>";
     html += "<label class='field-label' for='model-select'>選擇血壓機型號</label>";
     html += "<select id='model-select' name='model'>";
-    html += String("<option value='OMRON-HBP9030'") + (*bp_model == "OMRON-HBP9030" ? " selected" : "") + ">OMRON HBP-9030</option>";
-    html += String("<option value='CUSTOM'") + (*bp_model == "CUSTOM" ? " selected" : "") + ">自定義格式</option>";
+    html += "<option value='OMRON-HBP9030'";
+    if (*bp_model == "OMRON-HBP9030") html += " selected";
+    html += ">OMRON HBP-9030</option>";
+    html += "<option value='CUSTOM'";
+    if (*bp_model == "CUSTOM") html += " selected";
+    html += ">自定義格式</option>";
     html += "</select>";
     html += "<button class='btn' type='submit'>儲存設定</button>";
     html += "</form>";
