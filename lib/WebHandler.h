@@ -504,7 +504,9 @@ public:
 
       html += "<section class='panel latest-vitals'>";
       html += "<div class='section-head'><h2>最新量測</h2>";
-      html += "<span id='last-updated' class='last-updated'>最後更新：" + latest.timestamp + "（每 3 秒刷新）</span></div>";
+      html += "<span id='last-updated' class='last-updated'>最後更新：";
+      html += latest.timestamp;
+      html += "（每 3 秒刷新）</span></div>";
       html += "<div class='kpi-grid'>";
 
       html += renderKpiCard("kpi-sys", "pill-sys", "收縮壓", "mmHg", latest.systolic, sysOk, sysBad);
@@ -524,8 +526,9 @@ public:
       int displayCount = min(5, recordCount);
       for (int i = 0; i < displayCount; i++) {
         const BPData& record = recordManager->getRecord(i);
-        html += "<tr>";
-        html += "<td>" + record.timestamp + "</td>";
+        html += "<tr><td>";
+        html += record.timestamp;
+        html += "</td>";
         html += renderTableValueCell(record.systolic, record.valid, &WebHandler::isSystolicAbnormal);
         html += renderTableValueCell(record.diastolic, record.valid, &WebHandler::isDiastolicAbnormal);
         html += renderTableValueCell(record.pulse, record.valid, &WebHandler::isPulseAbnormal);
@@ -631,13 +634,15 @@ public:
     if (recordCount > 0) {
       for (int i = 0; i < recordCount; i++) {
         const BPData& record = recordManager->getRecord(i);
-        html += "<tr>";
-        html += "<td>" + record.timestamp + "</td>";
+        html += "<tr><td>";
+        html += record.timestamp;
+        html += "</td>";
         html += renderTableValueCell(record.systolic, record.valid, &WebHandler::isSystolicAbnormal);
         html += renderTableValueCell(record.diastolic, record.valid, &WebHandler::isDiastolicAbnormal);
         html += renderTableValueCell(record.pulse, record.valid, &WebHandler::isPulseAbnormal);
-        html += "<td><a href='/raw_data?id=" + String(i) + "' class='text-link'>查看原始數據</a></td>";
-        html += "</tr>";
+        html += "<td><a href='/raw_data?id=";
+        html += i; // 直接 += int 避免建一次 String(i) 暫物件
+        html += "' class='text-link'>查看原始數據</a></td></tr>";
       }
     } else {
       html += "<tr><td colspan='5'>尚無歷史記錄</td></tr>";
