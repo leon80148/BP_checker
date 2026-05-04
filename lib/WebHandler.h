@@ -236,7 +236,9 @@ private:
     return html;
   }
 
-  String buildPageEnd() const {
+  // 回 const char*：caller 用 `html += buildPageEnd()` 是 String += const char*，
+  // 不會建臨時 String（每頁 render 省一個 ~30 byte alloc）
+  const char* buildPageEnd() const {
     return "</div></body></html>";
   }
 
