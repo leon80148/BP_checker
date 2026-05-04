@@ -640,9 +640,15 @@ public:
         html += renderTableValueCell(record.systolic, record.valid, &WebHandler::isSystolicAbnormal);
         html += renderTableValueCell(record.diastolic, record.valid, &WebHandler::isDiastolicAbnormal);
         html += renderTableValueCell(record.pulse, record.valid, &WebHandler::isPulseAbnormal);
-        html += "<td><a href='/raw_data?id=";
-        html += i; // 直接 += int 避免建一次 String(i) 暫物件
-        html += "' class='text-link'>查看原始數據</a></td></tr>";
+        // rawData 僅存於 RAM，重啟後從 NVS 載入的記錄沒有原始位元組；
+        // 沒資料就顯示 dash，避免使用者點進去看到空白頁
+        if (record.rawData.length() > 0) {
+          html += "<td><a href='/raw_data?id=";
+          html += i;
+          html += "' class='text-link'>查看原始數據</a></td></tr>";
+        } else {
+          html += "<td class='value-na'>—</td></tr>";
+        }
       }
     } else {
       html += "<tr><td colspan='5'>尚無歷史記錄</td></tr>";
