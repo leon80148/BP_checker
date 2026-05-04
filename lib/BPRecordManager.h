@@ -24,7 +24,7 @@ private:
   int _recordCount;
   Preferences _preferences;
 
-  String _namespace = "bp_records";
+  static constexpr const char* kNamespace = "bp_records";
 
   String serializeRecord(const BPData& r) const {
     String s;
@@ -67,7 +67,7 @@ private:
 
   // 寫入單一 slot + metadata；addRecord 用此快取路徑（4 NVS writes）
   void saveSlot(int slot) {
-    _preferences.begin(_namespace.c_str(), false);
+    _preferences.begin(kNamespace, false);
     String recData = serializeRecord(_records[slot]);
     char key[12];
     snprintf(key, sizeof(key), "slot_%d", slot);
@@ -81,7 +81,7 @@ private:
   // 一次性寫入所有 in-memory slots（migration 用）
   void saveAllSlots() {
     if (_recordCount <= 0) return;
-    _preferences.begin(_namespace.c_str(), false);
+    _preferences.begin(kNamespace, false);
     char key[12];
     for (int i = 0; i < _recordCount; i++) {
       String recData = serializeRecord(_records[i]);
@@ -138,13 +138,13 @@ public:
     for (int i = 0; i < _maxRecords; i++) {
       _records[i] = BPData{};
     }
-    _preferences.begin(_namespace.c_str(), false);
+    _preferences.begin(kNamespace, false);
     _preferences.clear(); // 同時清掉舊 rec_* 與新 slot_* keys
     _preferences.end();
   }
 
   void loadFromStorage() {
-    _preferences.begin(_namespace.c_str(), true);
+    _preferences.begin(kNamespace, true);
     String schema = _preferences.getString("schema", "");
     int storedCount = _preferences.getInt("count", 0);
     int storedIndex = _preferences.getInt("index", 0);
