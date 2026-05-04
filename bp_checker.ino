@@ -55,7 +55,8 @@ void setup() {
   delay(1000); // 等待串列埠穩定
   
   // 初始化各個模組
-  webHandler = new WebHandler(&server, &preferences, &recordManager, 
+  webHandler = new WebHandler(&server, &preferences, &recordManager,
+                             &bpParser,
                              &bp_model, &lastData, &transportName, &transportStatus,
                              &hostname, &ap_ssid, &ap_password);
   

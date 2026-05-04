@@ -6,6 +6,7 @@
 #include <ArduinoJson.h>
 #include <WiFi.h>
 #include "BPRecordManager.h"
+#include "BP_Parser.h"
 
 // 處理網頁請求的類
 class WebHandler {
@@ -13,6 +14,7 @@ private:
   WebServer* server;
   Preferences* preferences;
   BP_RecordManager* recordManager;
+  BP_Parser* bpParser;
   String* bp_model;
   String* lastData;
   String* transportName;
@@ -168,11 +170,13 @@ private:
 
 public:
   WebHandler(WebServer* server, Preferences* preferences, BP_RecordManager* recordManager,
+             BP_Parser* bpParser,
              String* bp_model, String* lastData, String* transportName, String* transportStatus,
              const char** hostname, const char** ap_ssid, const char** ap_password) {
     this->server = server;
     this->preferences = preferences;
     this->recordManager = recordManager;
+    this->bpParser = bpParser;
     this->bp_model = bp_model;
     this->lastData = lastData;
     this->transportName = transportName;
@@ -381,6 +385,8 @@ public:
       preferences->putString("bp_model", new_model);
       preferences->end();
       *bp_model = new_model;
+      // 之前漏了這行：parser 留在舊型號，UI 切換完全不會生效到下次重啟前
+      bpParser->setModel(new_model);
 
       String html = buildPageStart("型號設定完成", "/bp_model", false, "<meta http-equiv='refresh' content='2;url=/'>");
       html += "<section class='panel'>";
