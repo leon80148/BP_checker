@@ -214,8 +214,9 @@ private:
 
   String buildPageStart(const String& title, const String& activePath, bool autoRefresh = false, const String& extraHead = "") const {
     String html;
-    // CSS ~4.5KB + head/nav 樣板 ~700B；預留避免每個 += 觸發 realloc
-    html.reserve(6144);
+    // CSS ~5.2KB + head/nav 樣板 ~700B + 留一點給小頁面 body 共 ~2KB ≈ 8KB
+    // 大頁面（handleMonitor/handleHistory）會在自己的 handler 再 reserve 更多
+    html.reserve(8192);
     html = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
     html += "<title>" + title + "</title>";
     html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
