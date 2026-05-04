@@ -117,19 +117,23 @@ static bool cdcDataCallback(const uint8_t* data, size_t dataLen, void* userArg) 
     return true;
   }
 
+  bool overflowed = false;
   for (size_t i = 0; i < dataLen; ++i) {
     size_t nextHead = (impl->rxHead + 1) % sizeof(impl->rxBuffer);
     if (nextHead == impl->rxTail) {
-      impl->currentState = TRANSPORT_STATE_ERROR;
-      impl->currentDetail = "RX buffer overflow";
-      break;
+      // Buffer 滿時丟棄此 byte，但繼續嘗試後續資料；
+      // 並把狀態保留在 RECEIVING 讓 read() 自然 drain，避免卡 ERROR。
+      overflowed = true;
+      continue;
     }
     impl->rxBuffer[impl->rxHead] = data[i];
     impl->rxHead = nextHead;
   }
 
   impl->currentState = TRANSPORT_STATE_RECEIVING;
-  impl->currentDetail = "Receiving CDC data";
+  impl->currentDetail = overflowed
+    ? String("Receiving CDC data (RX buffer overflow, bytes dropped)")
+    : String("Receiving CDC data");
   return true;
 }
 

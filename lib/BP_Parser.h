@@ -6,11 +6,11 @@
 // 血壓數據結構
 struct BPData {
   String timestamp;
-  int systolic;   // 收縮壓
-  int diastolic;  // 舒張壓
-  int pulse;      // 脈搏
-  String rawData; // 原始數據
-  bool valid;     // 數據是否有效
+  int systolic = -1;   // 收縮壓
+  int diastolic = -1;  // 舒張壓
+  int pulse = -1;      // 脈搏
+  String rawData;      // 原始數據
+  bool valid = false;  // 數據是否有效
 };
 
 class BP_Parser {
@@ -32,20 +32,6 @@ public:
 
   BPData parse(uint8_t* buffer, int length) {
     BPData result;
-    result.systolic = -1;
-    result.diastolic = -1;
-    result.pulse = -1;
-    result.valid = false;
-
-    // 建立原始數據的十六進制表示
-    String hexData = "";
-    for (int i = 0; i < length; i++) {
-      if (buffer[i] < 0x10) hexData += "0";
-      hexData += String(buffer[i], HEX) + " ";
-    }
-    result.rawData = hexData;
-
-    // 根據不同型號解析數據
     if (_model == "OMRON-HBP9030") {
       result = parseOmronHBP9030(buffer, length);
     } else if (_model == "OMRON-HBP1300") {
@@ -55,18 +41,22 @@ public:
     } else if (_model == "TERUMO-ES-P2020") {
       result = parseTerumoESP2020(buffer, length);
     } else {
-      // 嘗試通用解析邏輯
       result = parseGeneric(buffer, length);
     }
 
-    // 填入原始數據
+    // sub-parser 可能未填 rawData；只在需要時建構
     if (result.rawData.isEmpty()) {
+      String hexData;
+      hexData.reserve(length * 3);
+      for (int i = 0; i < length; i++) {
+        if (buffer[i] < 0x10) hexData += '0';
+        hexData += String(buffer[i], HEX);
+        hexData += ' ';
+      }
       result.rawData = hexData;
     }
 
-    // 檢查數據有效性
     result.valid = (result.systolic > 0 && result.diastolic > 0 && result.pulse > 0);
-    
     return result;
   }
 

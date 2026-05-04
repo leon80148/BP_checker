@@ -73,21 +73,25 @@ public:
     Serial.println("嘗試連接到WiFi...");
     // 使用AP+STA雙模式，保持AP可訪問
     WiFi.mode(WIFI_AP_STA);
-    
+
     // 維持AP熱點開啟
     WiFi.softAP(ap_ssid, ap_password);
     IPAddress apIP = WiFi.softAPIP();
     Serial.print("AP模式IP地址: ");
     Serial.println(apIP);
-    
+
+    // 啟用自動重連，避免長時間運行後 STA 斷線無法恢復
+    WiFi.setAutoReconnect(true);
+    WiFi.persistent(true);
+
     // 嘗試連接到已設定的WiFi
     WiFi.begin(sta_ssid.c_str(), sta_password.c_str());
-    
-    // 嘗試連接WiFi，最多嘗試20秒
+
+    // 嘗試連接WiFi，最多嘗試20秒（使用 200ms 輪詢縮短偵測延遲）
     int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-      delay(1000);
-      Serial.print(".");
+    while (WiFi.status() != WL_CONNECTED && attempts < 100) {
+      delay(200);
+      if (attempts % 5 == 0) Serial.print(".");
       attempts++;
     }
     

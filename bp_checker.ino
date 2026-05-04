@@ -112,24 +112,28 @@ void setup() {
 void loop() {
   // 處理Web伺服器事件
   server.handleClient();
-  
+
   // 處理數據接收
   dataProcessor->processIncomingData();
-  
+
   // 檢查TTL串口通訊活動狀態
   dataProcessor->checkActivity();
-  
-  // 檢查重置按鈕
+
+  // 非阻塞 reset button：按住 3 秒才重置，避免誤觸卡 loop
+  static unsigned long resetPressStart = 0;
   if (digitalRead(RESET_PIN) == LOW) {
-    delay(3000);  // 長按3秒
-    if (digitalRead(RESET_PIN) == LOW) {
+    if (resetPressStart == 0) {
+      resetPressStart = millis();
+    } else if (millis() - resetPressStart >= 3000) {
       Serial.println("重置WiFi設定...");
       preferences.begin("wifi-config", false);
       preferences.clear();
       preferences.end();
       ESP.restart();
     }
+  } else {
+    resetPressStart = 0;
   }
-  
+
   delay(10);
 }

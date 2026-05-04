@@ -74,99 +74,96 @@ public:
     if (transport->available() <= 0) {
       return false;
     }
-    
+
     *lastTransportActivity = millis();
     *transportActive = true;
-    
-    // 讀取數據
-    uint8_t buffer[100];
+
+    // 用 inter-byte timeout 模式讀取，兼顧 UART（bytes 1ms 間隔）與 USB CDC（爆量到達）。
+    // 比起原本每 byte 都 delay(2)，最多只在 byte 間 idle 等候 30ms，避免單次接收阻塞 webserver 200ms。
+    static constexpr int kBufferSize = 100;
+    static constexpr unsigned long kInterByteTimeoutMs = 30;
+    uint8_t buffer[kBufferSize];
     int byteCount = 0;
-    String dataStr = "<div class='data-section'><h3>原始數據 (十六進制):</h3><pre>";
-    String asciiStr = "<div class='data-section'><h3>原始數據 (ASCII):</h3><pre>";
-    
-    while (transport->available() > 0 && byteCount < 100) {
-      int incoming = transport->read();
-      if (incoming < 0) {
-        break;
+    unsigned long lastByteMs = millis();
+    while (byteCount < kBufferSize) {
+      if (transport->available() > 0) {
+        int incoming = transport->read();
+        if (incoming < 0) break;
+        buffer[byteCount++] = static_cast<uint8_t>(incoming);
+        lastByteMs = millis();
+        continue;
       }
-      buffer[byteCount] = static_cast<uint8_t>(incoming);
-      
-      // 組格式化的十六進制字串
-      if (buffer[byteCount] < 0x10) dataStr += "0";
-      dataStr += String(buffer[byteCount], HEX) + " ";
-      
-      // 添加ASCII顯示（可顯示字符）
-      if (buffer[byteCount] >= 32 && buffer[byteCount] <= 126) {
-        asciiStr += (char)buffer[byteCount];
-      } else {
-        asciiStr += ".";
-      }
-      
-      byteCount++;
-      if (byteCount % 16 == 0) {
+      if (millis() - lastByteMs > kInterByteTimeoutMs) break;
+      delay(2);
+    }
+
+    if (byteCount == 0) {
+      return false;
+    }
+
+    // 解析血壓數據（在組 HTML 之前先做，避免無資料時還浪費字串組裝）
+    BPData parsedData = bpParser->parse(buffer, byteCount);
+
+    // 一次組好 HTML，預先 reserve 容量以減少 String 重新配置
+    String dataStr;
+    String asciiStr;
+    dataStr.reserve(byteCount * 4 + 64);
+    asciiStr.reserve(byteCount * 2 + 64);
+    dataStr = "<div class='data-section'><h3>原始數據 (十六進制):</h3><pre>";
+    asciiStr = "<div class='data-section'><h3>原始數據 (ASCII):</h3><pre>";
+    for (int i = 0; i < byteCount; i++) {
+      uint8_t b = buffer[i];
+      if (b < 0x10) dataStr += '0';
+      dataStr += String(b, HEX);
+      dataStr += ' ';
+      asciiStr += (b >= 32 && b <= 126) ? (char)b : '.';
+      if ((i + 1) % 16 == 0) {
         dataStr += "<br>";
         asciiStr += "<br>";
       }
-      delay(2);
     }
     dataStr += "</pre></div>";
     asciiStr += "</pre></div>";
-    
-    // 組合完整的原始數據顯示
     *lastData = dataStr + asciiStr;
-    
-    // 解析血壓數據
-    BPData parsedData = bpParser->parse(buffer, byteCount);
-    
-    // 添加原始數據到解析結果
     parsedData.rawData = *lastData;
-    
-    // 獲取當前時間並格式化為台北時間
+
+    // 取得台北時區時間
     struct tm timeinfo;
-    if(getLocalTime(&timeinfo)) {
-      char timeStr[64];
-      // 格式化為 2025-04-05 15:30:45 格式
+    if (getLocalTime(&timeinfo)) {
+      char timeStr[32];
       strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", &timeinfo);
       parsedData.timestamp = String(timeStr);
     } else {
-      // 如果無法獲取時間，使用簡單時間戳
       parsedData.timestamp = String("時間未同步");
     }
-    
-    // 無論數據是否有效，都添加到歷史記錄
+
     recordManager->addRecord(parsedData);
-    
-    // 顯示數據在串列監視器
-    Serial.print("接收數據: ");
-    for(int i=0; i<byteCount; i++) {
-      if(buffer[i] < 0x10) Serial.print("0");
-      Serial.print(buffer[i], HEX);
-      Serial.print(" ");
+
+    // Serial log（除錯用，組單行字串只 print 一次）
+    String hexLine;
+    String asciiLine;
+    hexLine.reserve(byteCount * 3);
+    asciiLine.reserve(byteCount);
+    for (int i = 0; i < byteCount; i++) {
+      uint8_t b = buffer[i];
+      if (b < 0x10) hexLine += '0';
+      hexLine += String(b, HEX);
+      hexLine += ' ';
+      asciiLine += (b >= 32 && b <= 126) ? (char)b : '.';
     }
-    Serial.println();
-    
-    // 嘗試顯示ASCII數據
-    Serial.print("ASCII數據: ");
-    for(int i=0; i<byteCount; i++) {
-      if(buffer[i] >= 32 && buffer[i] <= 126) {
-        Serial.print((char)buffer[i]);
-      } else {
-        Serial.print(".");
-      }
-    }
-    Serial.println();
-    
-    // 顯示解析結果
+    Serial.println("接收數據: " + hexLine);
+    Serial.println("ASCII數據: " + asciiLine);
     if (parsedData.valid) {
-      Serial.println("解析結果: SYS=" + String(parsedData.systolic) + " DIA=" + String(parsedData.diastolic) + " PUL=" + String(parsedData.pulse));
+      Serial.println("解析結果: SYS=" + String(parsedData.systolic) +
+                     " DIA=" + String(parsedData.diastolic) +
+                     " PUL=" + String(parsedData.pulse));
     } else {
       Serial.println("無法解析為有效的血壓數據，但已儲存原始數據");
     }
-    
     Serial.println("數據已準備，可通過網頁查看");
     Serial.println("----------------------------------");
     syncTransportStatus();
-    
+
     return true;
   }
 

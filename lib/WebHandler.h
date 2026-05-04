@@ -51,8 +51,11 @@ private:
     return "<a class='" + cls + "' href='" + href + "'>" + label + "</a>";
   }
 
-  String sharedStyle() {
-    String css = "<style>";
+  const String& sharedStyle() {
+    static String css;
+    if (!css.isEmpty()) return css;
+    css.reserve(4500);
+    css += "<style>";
     css += ":root{";
     css += "--bg:#edf3fb;";
     css += "--surface:#ffffff;";
@@ -513,7 +516,8 @@ public:
   }
 
   void handleHistoryAPI() {
-    StaticJsonDocument<2048> doc;
+    // 20 筆記錄 × (object overhead ~72B + ~21B timestamp) ≈ 2KB；2048 太緊。
+    StaticJsonDocument<4096> doc;
     JsonArray records = doc.createNestedArray("records");
 
     int recordCount = recordManager->getRecordCount();
