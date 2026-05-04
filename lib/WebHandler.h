@@ -303,6 +303,8 @@ public:
     });
   }
 
+private:
+  // 以下 handle* 都只在 setupRoutes 內以 lambda 連接到 route，無外部 caller。
   void handleRoot() {
     // WiFi.scanNetworks() 同步阻塞 ~5 秒；快取 20 秒避免每次 /config 都重掃。
     // 顯式加 ?rescan=1 才強制重掃（重新掃描按鈕會帶這參數）。
