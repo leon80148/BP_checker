@@ -107,7 +107,7 @@ bash scripts/check_ui_markup.sh
 arduino-cli compile -b esp32:esp32:esp32s3 --board-options USBMode=default /path/to/BP_checker
 ```
 
-如果 Arduino sketch 資料夾名稱和 sketch 主檔名稱不一致，請先把主檔改成 `BP_checker.ino`，並放在 `BP_checker` 目錄下再編譯。
+主檔目前為 `bp_checker.ino`。Arduino 一般要求 sketch 主檔名稱與所在資料夾名稱一致；本專案資料夾為 `BP_checker`，跟主檔大小寫不同。Windows 上因為檔案系統不分大小寫所以可直接編譯；Linux/macOS 在編譯前可能需要把主檔改名為 `BP_checker.ino`（或把資料夾改為 `bp_checker`）。
 
 ### 上傳
 
