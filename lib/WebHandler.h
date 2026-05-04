@@ -19,9 +19,11 @@ private:
   String* lastData;
   String* transportName;
   String* transportStatus;
-  const char** hostname;
-  const char** ap_ssid;
-  const char** ap_password;
+  // 全域 ap_*/hostname 是 const char* 編譯期常數（bp_checker.ino），
+  // 用單層 const char* 即可，省一層 indirection
+  const char* hostname;
+  const char* ap_ssid;
+  const char* ap_password;
 
   bool isSystolicAbnormal(int value) {
     return value > 130 || value < 90;
@@ -245,7 +247,7 @@ public:
   WebHandler(WebServer* server, Preferences* preferences, BP_RecordManager* recordManager,
              BP_Parser* bpParser,
              String* bp_model, String* lastData, String* transportName, String* transportStatus,
-             const char** hostname, const char** ap_ssid, const char** ap_password) {
+             const char* hostname, const char* ap_ssid, const char* ap_password) {
     this->server = server;
     this->preferences = preferences;
     this->recordManager = recordManager;
@@ -380,7 +382,7 @@ public:
       html += WiFi.localIP().toString();
       html += "</strong></li>";
       html += "<li><span>瀏覽器存取</span><strong>http://";
-      html += *hostname;
+      html += hostname;
       html += ".local</strong></li>";
       html += "</ul></div>";
     }
@@ -427,10 +429,10 @@ public:
     html += htmlEscape(new_ssid);
     html += "</strong></li>";
     html += "<li><span>設備網址</span><strong>http://";
-    html += *hostname;
+    html += hostname;
     html += ".local</strong></li>";
     html += "<li><span>備援 AP</span><strong>";
-    html += *ap_ssid;
+    html += ap_ssid;
     html += "</strong></li>";
     html += "</ul>";
     html += "</section>";
@@ -584,12 +586,12 @@ public:
     html += wifiIp;
     html += "</strong></li>";
     html += "<li><span>可訪問網址</span><strong>http://";
-    html += *hostname; // const char* via String += overload, no temporary
+    html += hostname; // const char* via String += overload, no temporary
     html += ".local</strong></li>";
     html += "<li><span>AP 熱點</span><strong>";
-    html += *ap_ssid;
+    html += ap_ssid;
     html += " (";
-    html += *ap_password;
+    html += ap_password;
     html += ")</strong></li>";
     html += "</ul>";
     html += "</section>";
