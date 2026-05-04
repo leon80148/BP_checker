@@ -40,6 +40,24 @@ private:
     return abnormal ? "value-bad" : "value-good";
   }
 
+  // 針對使用者可控字串做最小 HTML escape，防止 SSID/型號名含 '<' 把後續解讀成 tag
+  String htmlEscape(const String& s) {
+    String out;
+    out.reserve(s.length());
+    for (size_t i = 0; i < s.length(); i++) {
+      char c = s.charAt(i);
+      switch (c) {
+        case '<':  out += "&lt;"; break;
+        case '>':  out += "&gt;"; break;
+        case '&':  out += "&amp;"; break;
+        case '"':  out += "&quot;"; break;
+        case '\'': out += "&#39;"; break;
+        default:   out += c;
+      }
+    }
+    return out;
+  }
+
   // 表格中單一欄位：對 invalid record 顯示 "—" 並用中性樣式，避免 -1 紅字
   String renderTableValueCell(int value, bool valid, bool (WebHandler::*abnormalFn)(int)) {
     bool ok = valid && value > 0;
@@ -320,8 +338,10 @@ public:
         if (quality > 100) quality = 100;
         if (quality < 0) quality = 0;
 
-        html += "<option value='" + WiFi.SSID(i) + "'>";
-        html += WiFi.SSID(i) + " (" + quality + "%";
+        // 鄰近 AP 廣播的 SSID 屬於外部輸入，可能含 ' " < 等字元；escape 後寫入
+        String safeSsid = htmlEscape(WiFi.SSID(i));
+        html += "<option value='" + safeSsid + "'>";
+        html += safeSsid + " (" + quality + "%";
         if (WiFi.encryptionType(i) == WIFI_AUTH_OPEN) {
           html += " 開放";
         }
@@ -392,7 +412,7 @@ public:
     html += "<h2>WiFi 設定已儲存</h2>";
     html += "<p class='helper-text'>設備將重新啟動並嘗試連接新 WiFi。若失敗，可長按 Reset 3 秒還原設定。</p>";
     html += "<ul class='status-list'>";
-    html += "<li><span>目標 SSID</span><strong>" + new_ssid + "</strong></li>";
+    html += "<li><span>目標 SSID</span><strong>" + htmlEscape(new_ssid) + "</strong></li>";
     html += "<li><span>設備網址</span><strong>http://" + String(*hostname) + ".local</strong></li>";
     html += "<li><span>備援 AP</span><strong>" + String(*ap_ssid) + "</strong></li>";
     html += "</ul>";
@@ -420,7 +440,7 @@ public:
     html += "</form>";
     html += "<div class='panel' style='margin:14px 0 0;padding:14px 16px;'>";
     html += "<h3>目前型號</h3>";
-    html += "<p class='helper-text'>" + *bp_model + "</p>";
+    html += "<p class='helper-text'>" + htmlEscape(*bp_model) + "</p>";
     html += "</div>";
     html += "</section>";
     html += buildPageEnd();
@@ -441,7 +461,7 @@ public:
 
       String html = buildPageStart("型號設定完成", "/bp_model", false, "<meta http-equiv='refresh' content='2;url=/'>");
       html += "<section class='panel'>";
-      html += "<h2>已套用型號：" + new_model + "</h2>";
+      html += "<h2>已套用型號：" + htmlEscape(new_model) + "</h2>";
       html += "<p class='helper-text'>系統將返回監控頁面。</p>";
       html += "</section>";
       html += buildPageEnd();
@@ -524,7 +544,7 @@ public:
     html += "<h2>連線資訊</h2>";
     html += "<ul class='status-list'>";
     html += "<li><span>設備名稱</span><strong>BP_checker</strong></li>";
-    html += "<li><span>血壓機型號</span><strong>" + *bp_model + "</strong></li>";
+    html += "<li><span>血壓機型號</span><strong>" + htmlEscape(*bp_model) + "</strong></li>";
     html += "<li><span>資料通道</span><strong id='conn-transport'>" + *transportName + "</strong></li>";
     html += "<li><span>通道狀態</span><strong id='conn-status'>" + *transportStatus + "</strong></li>";
     html += "<li><span>WiFi IP</span><strong id='conn-ip'>" + wifiIp + "</strong></li>";

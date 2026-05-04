@@ -115,8 +115,9 @@ public:
     static const char kHex[] = "0123456789abcdef";
     String dataStr;
     String asciiStr;
+    // ASCII 區塊保留一點額外空間給 HTML escape（< → &lt; 等放大 4 倍）
     dataStr.reserve(byteCount * 4 + 64);
-    asciiStr.reserve(byteCount * 2 + 64);
+    asciiStr.reserve(byteCount * 4 + 64);
     dataStr = "<div class='data-section'><h3>原始數據 (十六進制):</h3><pre>";
     asciiStr = "<div class='data-section'><h3>原始數據 (ASCII):</h3><pre>";
     for (int i = 0; i < byteCount; i++) {
@@ -124,7 +125,18 @@ public:
       dataStr += kHex[b >> 4];
       dataStr += kHex[b & 0x0F];
       dataStr += ' ';
-      asciiStr += (b >= 32 && b <= 126) ? (char)b : '.';
+      // BP 機若回傳 '<' 等字元會被瀏覽器當 HTML 解析；做最小 escape
+      if (b < 32 || b > 126) {
+        asciiStr += '.';
+      } else if (b == '<') {
+        asciiStr += "&lt;";
+      } else if (b == '>') {
+        asciiStr += "&gt;";
+      } else if (b == '&') {
+        asciiStr += "&amp;";
+      } else {
+        asciiStr += (char)b;
+      }
       if ((i + 1) % 16 == 0) {
         dataStr += "<br>";
         asciiStr += "<br>";
