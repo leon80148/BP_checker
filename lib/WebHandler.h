@@ -45,6 +45,21 @@ private:
       : "<span class='state-pill state-ok'>正常</span>";
   }
 
+  // 表格中單一欄位：對 invalid record 顯示 "—" 並用中性樣式，避免 -1 紅字
+  String renderTableValueCell(int value, bool valid, bool (WebHandler::*abnormalFn)(int)) {
+    bool ok = valid && value > 0;
+    if (!ok) return "<td class='value-na'>—</td>";
+    bool bad = (this->*abnormalFn)(value);
+    String s;
+    s.reserve(48);
+    s += "<td class='";
+    s += valueClass(bad);
+    s += "'>";
+    s += String(value);
+    s += "</td>";
+    return s;
+  }
+
   // KPI 卡片：valueOk=false 顯示 "—" + 中性 pill，避免 -1 之類無效數值被誤判為異常
   String renderKpiCard(const char* idVal, const char* idPill,
                        const char* label, const char* unit,
@@ -483,15 +498,11 @@ public:
       int displayCount = min(5, recordCount);
       for (int i = 0; i < displayCount; i++) {
         const BPData& record = recordManager->getRecord(i);
-        bool sb = isSystolicAbnormal(record.systolic);
-        bool db = isDiastolicAbnormal(record.diastolic);
-        bool pb = isPulseAbnormal(record.pulse);
-
         html += "<tr>";
         html += "<td>" + record.timestamp + "</td>";
-        html += "<td class='" + valueClass(sb) + "'>" + String(record.systolic) + "</td>";
-        html += "<td class='" + valueClass(db) + "'>" + String(record.diastolic) + "</td>";
-        html += "<td class='" + valueClass(pb) + "'>" + String(record.pulse) + "</td>";
+        html += renderTableValueCell(record.systolic, record.valid, &WebHandler::isSystolicAbnormal);
+        html += renderTableValueCell(record.diastolic, record.valid, &WebHandler::isDiastolicAbnormal);
+        html += renderTableValueCell(record.pulse, record.valid, &WebHandler::isPulseAbnormal);
         html += "</tr>";
       }
 
@@ -591,15 +602,11 @@ public:
     if (recordCount > 0) {
       for (int i = 0; i < recordCount; i++) {
         const BPData& record = recordManager->getRecord(i);
-        bool sb = isSystolicAbnormal(record.systolic);
-        bool db = isDiastolicAbnormal(record.diastolic);
-        bool pb = isPulseAbnormal(record.pulse);
-
         html += "<tr>";
         html += "<td>" + record.timestamp + "</td>";
-        html += "<td class='" + valueClass(sb) + "'>" + String(record.systolic) + "</td>";
-        html += "<td class='" + valueClass(db) + "'>" + String(record.diastolic) + "</td>";
-        html += "<td class='" + valueClass(pb) + "'>" + String(record.pulse) + "</td>";
+        html += renderTableValueCell(record.systolic, record.valid, &WebHandler::isSystolicAbnormal);
+        html += renderTableValueCell(record.diastolic, record.valid, &WebHandler::isDiastolicAbnormal);
+        html += renderTableValueCell(record.pulse, record.valid, &WebHandler::isPulseAbnormal);
         html += "<td><a href='/raw_data?id=" + String(i) + "' class='text-link'>查看原始數據</a></td>";
         html += "</tr>";
       }
