@@ -1,14 +1,13 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include <Preferences.h>
-#include <ESPmDNS.h>
-#include <ArduinoJson.h>
-#include <time.h>
-#include "lib/BP_Parser.h"           // 引入血壓機解析器庫
-#include "lib/BPRecordManager.h"     // 引入血壓記錄管理器庫
-#include "lib/WebHandler.h"          // 引入網頁處理器庫
-#include "lib/WiFiManager.h"         // 引入WiFi管理器庫
-#include "lib/DataProcessor.h"       // 引入數據處理器庫
+#include <time.h>                    // configTime / tzset / setenv("TZ", ...)
+// ArduinoJson、ESPmDNS 由 WebHandler.h / WiFiManager.h 已 transitively include
+#include "lib/BP_Parser.h"           // 血壓機解析器
+#include "lib/BPRecordManager.h"     // 血壓記錄管理器
+#include "lib/WebHandler.h"          // 網頁處理器
+#include "lib/WiFiManager.h"         // WiFi 管理器
+#include "lib/DataProcessor.h"       // 數據處理器
 #include "lib/BPConfig.h"
 #include "lib/transports/MonitorTransport.h"
 #include "lib/transports/UartTransport.h"
