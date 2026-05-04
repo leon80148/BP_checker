@@ -45,6 +45,44 @@ private:
       : "<span class='state-pill state-ok'>正常</span>";
   }
 
+  // KPI 卡片：valueOk=false 顯示 "—" + 中性 pill，避免 -1 之類無效數值被誤判為異常
+  String renderKpiCard(const char* idVal, const char* idPill,
+                       const char* label, const char* unit,
+                       int value, bool valueOk, bool bad) {
+    String html;
+    html.reserve(320);
+    html += "<article class='kpi-card'>";
+    html += "<div class='kpi-label'><span>";
+    html += label;
+    html += "</span><span>";
+    html += unit;
+    html += "</span></div>";
+    html += "<div id='";
+    html += idVal;
+    if (!valueOk) {
+      html += "' class='kpi-value value-na'>—</div>";
+    } else {
+      html += "' class='kpi-value ";
+      html += valueClass(bad);
+      html += "'>";
+      html += String(value);
+      html += "</div>";
+    }
+    html += "<span id='";
+    html += idPill;
+    if (!valueOk) {
+      html += "' class='state-pill state-na'>未解析</span>";
+    } else {
+      html += "' class='state-pill ";
+      html += bad ? "state-alert" : "state-ok";
+      html += "'>";
+      html += bad ? "異常" : "正常";
+      html += "</span>";
+    }
+    html += "</article>";
+    return html;
+  }
+
   String navLink(const String& href, const String& label, const String& activePath) {
     String cls = "top-nav-link";
     if (href == activePath) {
@@ -104,9 +142,11 @@ private:
     css += ".kpi-value{font-size:40px;line-height:1;font-weight:800;margin:10px 0 8px;}";
     css += ".value-good{color:var(--success);}";
     css += ".value-bad{color:var(--danger);}";
+    css += ".value-na{color:var(--muted);}";
     css += ".state-pill{display:inline-block;padding:4px 8px;border-radius:999px;font-size:12px;font-weight:700;}";
     css += ".state-ok{background:rgba(17,138,76,.12);color:var(--success);}";
     css += ".state-alert{background:rgba(217,48,37,.12);color:var(--danger);}";
+    css += ".state-na{background:rgba(96,112,138,.14);color:var(--muted);}";
 
     css += ".recent-table table,.history-table table{width:100%;border-collapse:collapse;font-size:14px;overflow:hidden;border-radius:12px;}";
     css += ".recent-table th,.recent-table td,.history-table th,.history-table td{padding:11px 10px;border-bottom:1px solid #e5edf7;text-align:center;}";
@@ -413,32 +453,22 @@ public:
     if (recordCount > 0) {
       const BPData& latest = recordManager->getLatestRecord();
 
-      bool systolicBad = isSystolicAbnormal(latest.systolic);
-      bool diastolicBad = isDiastolicAbnormal(latest.diastolic);
-      bool pulseBad = isPulseAbnormal(latest.pulse);
+      // 無效記錄（valid=false 或數值非正）一律顯示中性 "—"，避免 "-1 異常" 紅字誤導
+      bool sysOk = latest.valid && latest.systolic > 0;
+      bool diaOk = latest.valid && latest.diastolic > 0;
+      bool pulOk = latest.valid && latest.pulse > 0;
+      bool sysBad = sysOk && isSystolicAbnormal(latest.systolic);
+      bool diaBad = diaOk && isDiastolicAbnormal(latest.diastolic);
+      bool pulBad = pulOk && isPulseAbnormal(latest.pulse);
 
       html += "<section class='panel latest-vitals'>";
       html += "<div class='section-head'><h2>最新量測</h2>";
       html += "<span id='last-updated' class='last-updated'>最後更新：" + latest.timestamp + "（每 3 秒刷新）</span></div>";
       html += "<div class='kpi-grid'>";
 
-      html += "<article class='kpi-card'>";
-      html += "<div class='kpi-label'><span>收縮壓</span><span>mmHg</span></div>";
-      html += "<div id='kpi-sys' class='kpi-value " + valueClass(systolicBad) + "'>" + String(latest.systolic) + "</div>";
-      html += "<span id='pill-sys' class='state-pill " + String(systolicBad ? "state-alert" : "state-ok") + "'>" + String(systolicBad ? "異常" : "正常") + "</span>";
-      html += "</article>";
-
-      html += "<article class='kpi-card'>";
-      html += "<div class='kpi-label'><span>舒張壓</span><span>mmHg</span></div>";
-      html += "<div id='kpi-dia' class='kpi-value " + valueClass(diastolicBad) + "'>" + String(latest.diastolic) + "</div>";
-      html += "<span id='pill-dia' class='state-pill " + String(diastolicBad ? "state-alert" : "state-ok") + "'>" + String(diastolicBad ? "異常" : "正常") + "</span>";
-      html += "</article>";
-
-      html += "<article class='kpi-card'>";
-      html += "<div class='kpi-label'><span>脈搏</span><span>bpm</span></div>";
-      html += "<div id='kpi-pul' class='kpi-value " + valueClass(pulseBad) + "'>" + String(latest.pulse) + "</div>";
-      html += "<span id='pill-pul' class='state-pill " + String(pulseBad ? "state-alert" : "state-ok") + "'>" + String(pulseBad ? "異常" : "正常") + "</span>";
-      html += "</article>";
+      html += renderKpiCard("kpi-sys", "pill-sys", "收縮壓", "mmHg", latest.systolic, sysOk, sysBad);
+      html += renderKpiCard("kpi-dia", "pill-dia", "舒張壓", "mmHg", latest.diastolic, diaOk, diaBad);
+      html += renderKpiCard("kpi-pul", "pill-pul", "脈搏",   "bpm",  latest.pulse,    pulOk, pulBad);
 
       html += "</div></section>";
 
@@ -517,15 +547,21 @@ public:
         "const ip=document.getElementById('conn-ip');if(ip)ip.textContent=d.wifi_ip||'未連線';"
         "if(d.count>0){"
           "if(!document.getElementById('kpi-sys')){location.reload();return;}"
-          "bpKpi('kpi-sys','pill-sys',d.systolic,d.sysBad);"
-          "bpKpi('kpi-dia','pill-dia',d.diastolic,d.diaBad);"
-          "bpKpi('kpi-pul','pill-pul',d.pulse,d.pulBad);"
+          "const v=d.valid===true;"
+          "bpKpi('kpi-sys','pill-sys',d.systolic,d.sysBad,v&&d.systolic>0);"
+          "bpKpi('kpi-dia','pill-dia',d.diastolic,d.diaBad,v&&d.diastolic>0);"
+          "bpKpi('kpi-pul','pill-pul',d.pulse,d.pulBad,v&&d.pulse>0);"
           "const u=document.getElementById('last-updated');"
           "if(u)u.textContent='最後更新：'+d.timestamp+'（每 3 秒刷新）';"
         "}}catch(e){}"
       "}"
-      "function bpKpi(iv,ip,v,bad){"
+      "function bpKpi(iv,ip,v,bad,ok){"
         "const a=document.getElementById(iv),b=document.getElementById(ip);"
+        "if(!ok){"
+          "if(a){a.textContent='—';a.className='kpi-value value-na';}"
+          "if(b){b.textContent='未解析';b.className='state-pill state-na';}"
+          "return;"
+        "}"
         "if(a){a.textContent=v;a.className='kpi-value '+(bad?'value-bad':'value-good');}"
         "if(b){b.textContent=bad?'異常':'正常';b.className='state-pill '+(bad?'state-alert':'state-ok');}"
       "}"
