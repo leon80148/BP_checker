@@ -563,7 +563,10 @@ public:
     }
     html += "</details>";
 
-    String wifiIp = (WiFi.status() == WL_CONNECTED) ? WiFi.localIP().toString() : String("未連線");
+    // ternary 兩端需 common type，會多生一個 String temp；改 if/else 直接 assign
+    String wifiIp;
+    if (WiFi.status() == WL_CONNECTED) wifiIp = WiFi.localIP().toString();
+    else wifiIp = "未連線";
     html += "<section class='panel'>";
     html += "<h2>連線資訊</h2>";
     html += "<ul class='status-list'>";
@@ -738,7 +741,8 @@ public:
     // 不會發生 mid-request mutation，可直接 c_str() 引用省 pool 複製
     doc["transport_name"] = transportName->c_str();
     doc["transport_status"] = transportStatus->c_str();
-    String wifiIp = (WiFi.status() == WL_CONNECTED) ? WiFi.localIP().toString() : String("");
+    String wifiIp;
+    if (WiFi.status() == WL_CONNECTED) wifiIp = WiFi.localIP().toString();
     doc["wifi_ip"] = wifiIp.c_str();
 
     String jsonStr;
