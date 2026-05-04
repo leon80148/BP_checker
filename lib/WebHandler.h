@@ -653,7 +653,9 @@ private:
 
   void handleHistory() {
     String html;
-    html.reserve(8192); // CSS ~4.5KB + 20 列表 + danger zone ~3KB
+    // CSS ~4.5KB + nav/header ~700B + 20 列表（~250B/row × 20 = 5KB）+ danger zone ~300B
+    // 估計 ~10.5KB，留餘裕到 12288 避免 realloc
+    html.reserve(12288);
     html = buildPageStart("血壓歷史記錄", "/history");
 
     html += "<section class='panel history-table'>";
