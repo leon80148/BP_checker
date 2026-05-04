@@ -12,11 +12,13 @@ private:
   BP_Parser* bpParser;
   BP_RecordManager* recordManager;
   String* lastData;
-  bool* transportActive;
-  unsigned long* lastTransportActivity;
   String* transportName;
   String* transportStatus;
   MonitorTransport* transport;
+
+  // 內部 inactivity 追蹤（先前是 bp_checker.ino 全域，但只有此類用到）
+  bool transportActive = false;
+  unsigned long lastTransportActivity = 0;
 
   // 上次同步的狀態快取，避免每 loop iteration 都重建 transportStatus String
   MonitorTransportState lastSyncedState = TRANSPORT_STATE_STARTING;
@@ -50,13 +52,11 @@ private:
 
 public:
   DataProcessor(BP_Parser* bpParser, BP_RecordManager* recordManager,
-                String* lastData, bool* transportActive, unsigned long* lastTransportActivity,
+                String* lastData,
                 String* transportName, String* transportStatus, MonitorTransport* transport) {
     this->bpParser = bpParser;
     this->recordManager = recordManager;
     this->lastData = lastData;
-    this->transportActive = transportActive;
-    this->lastTransportActivity = lastTransportActivity;
     this->transportName = transportName;
     this->transportStatus = transportStatus;
     this->transport = transport;
@@ -106,8 +106,8 @@ public:
     }
 
     // 確認真的讀到 byte 後才標記活動
-    *lastTransportActivity = millis();
-    *transportActive = true;
+    lastTransportActivity = millis();
+    transportActive = true;
 
     // 解析血壓數據（在組 HTML 之前先做，避免無資料時還浪費字串組裝）
     BPData parsedData = bpParser->parse(buffer, byteCount);
@@ -196,8 +196,8 @@ public:
   // processIncomingData 會在 loop 開頭就呼叫 poll/syncTransportStatus，
   // 所以這裡只負責偵測 idle 狀態，不再重複 poll。
   void checkActivity() {
-    if (*transportActive && (millis() - *lastTransportActivity > 5000)) {
-      *transportActive = false;
+    if (transportActive && (millis() - lastTransportActivity > 5000)) {
+      transportActive = false;
       Serial.println("資料通道已超過 5 秒沒有新資料: " + *transportStatus);
     }
   }

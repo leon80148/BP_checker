@@ -22,9 +22,8 @@ const char* hostname = "bp_checker"; // mDNS主機名
 // 血壓機型號參數
 String bp_model = "OMRON-HBP9030"; // 預設型號
 
-// 串口通訊狀態
-bool transportActive = false;
-unsigned long lastTransportActivity = 0;
+// 串口通訊狀態（lastData/transportName/transportStatus 給 WebHandler 也用，所以仍是全域；
+// inactivity 追蹤已封裝進 DataProcessor）
 String lastData = "";
 String transportName = "";
 String transportStatus = "";
@@ -70,8 +69,8 @@ void setup() {
     monitorTransport = new UartTransport(&Serial1, kUartRxPin, kUartTxPin, kMonitorBaudRate);
   }
   
-  dataProcessor = new DataProcessor(&bpParser, &recordManager, 
-                                   &lastData, &transportActive, &lastTransportActivity,
+  dataProcessor = new DataProcessor(&bpParser, &recordManager,
+                                   &lastData,
                                    &transportName, &transportStatus, monitorTransport);
   
   // 設置血壓解析器型號（read-only 開啟，省 NVS 寫入準備工作）
