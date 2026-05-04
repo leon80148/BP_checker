@@ -186,14 +186,16 @@ public:
     server->on("/", HTTP_GET, [this]() { this->handleMonitor(); });
     server->on("/config", HTTP_GET, [this]() { this->handleRoot(); });
     server->on("/configure", HTTP_POST, [this]() { this->handleConfigure(); });
+    // /data 回傳最新原始資料的 HTML 片段（含 <div>/<pre> 標籤），不是純文字。
     server->on("/data", HTTP_GET, [this]() {
-      server->send(200, "text/plain", *lastData);
+      server->send(200, "text/html; charset=UTF-8", *lastData);
     });
 
     // 添加歷史記錄相關API
     server->on("/history", HTTP_GET, [this]() { this->handleHistory(); });
     server->on("/api/history", HTTP_GET, [this]() { this->handleHistoryAPI(); });
-    server->on("/clear_history", HTTP_GET, [this]() { this->handleClearHistory(); });
+    // 破壞性操作改為 POST，避免瀏覽器 link prefetch、爬蟲、誤點 GET 觸發。
+    server->on("/clear_history", HTTP_POST, [this]() { this->handleClearHistory(); });
 
     // 添加血壓機型號設定路由
     server->on("/bp_model", HTTP_GET, [this]() { this->handleBpModelPage(); });
@@ -202,8 +204,7 @@ public:
     // 添加原始資料顯示路由
     server->on("/raw_data", HTTP_GET, [this]() { this->handleRawData(); });
 
-    // 添加重置路由
-    server->on("/reset", HTTP_GET, [this]() {
+    server->on("/reset", HTTP_POST, [this]() {
       preferences->begin("wifi-config", false);
       preferences->clear();
       preferences->end();
@@ -482,7 +483,9 @@ public:
     html += "<section class='panel danger-zone'>";
     html += "<h3>維護操作</h3>";
     html += "<p class='helper-text'>若要重新配網，可重置 WiFi 設定並重啟。</p>";
-    html += "<a href='/reset' class='btn btn-danger'>重置 WiFi 設定</a>";
+    html += "<form method='post' action='/reset' onsubmit=\"return confirm('確定要重置 WiFi 設定並重啟嗎？');\" style='display:inline'>";
+    html += "<button type='submit' class='btn btn-danger'>重置 WiFi 設定</button>";
+    html += "</form>";
     html += "</section>";
 
     html += buildPageEnd();
@@ -529,7 +532,9 @@ public:
     html += "<section class='panel danger-zone'>";
     html += "<h3>危險操作</h3>";
     html += "<p class='helper-text'>此操作會清除全部歷史資料且無法復原。</p>";
-    html += "<a href='/clear_history' class='btn btn-danger' onclick=\"return confirm('確定要清除所有歷史記錄嗎？');\">清除記錄</a>";
+    html += "<form method='post' action='/clear_history' onsubmit=\"return confirm('確定要清除所有歷史記錄嗎？');\" style='display:inline'>";
+    html += "<button type='submit' class='btn btn-danger'>清除記錄</button>";
+    html += "</form>";
     html += "</section>";
 
     html += buildPageEnd();

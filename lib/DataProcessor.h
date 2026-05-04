@@ -167,10 +167,9 @@ public:
     return true;
   }
 
+  // processIncomingData 會在 loop 開頭就呼叫 poll/syncTransportStatus，
+  // 所以這裡只負責偵測 idle 狀態，不再重複 poll。
   void checkActivity() {
-    transport->poll();
-    syncTransportStatus();
-
     if (*transportActive && (millis() - *lastTransportActivity > 5000)) {
       *transportActive = false;
       Serial.println("資料通道已超過 5 秒沒有新資料: " + *transportStatus);
