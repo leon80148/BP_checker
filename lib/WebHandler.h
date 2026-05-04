@@ -587,8 +587,9 @@ public:
   }
 
   void handleHistoryAPI() {
-    // 20 筆記錄 × (object overhead ~72B + ~21B timestamp) ≈ 2KB；2048 太緊。
-    StaticJsonDocument<4096> doc;
+    // ArduinoJson v6：傳 String 進去會 copy 進 doc pool；改用 c_str() 直接引用，
+    // 在 single-thread handler 內 BPData 不會被修改，pointer 安全。20 筆省 ~420B pool。
+    StaticJsonDocument<3072> doc;
     JsonArray records = doc.createNestedArray("records");
 
     int recordCount = recordManager->getRecordCount();
@@ -596,7 +597,7 @@ public:
       const BPData& record = recordManager->getRecord(i);
 
       JsonObject recordObj = records.createNestedObject();
-      recordObj["timestamp"] = record.timestamp;
+      recordObj["timestamp"] = record.timestamp.c_str();
       recordObj["systolic"] = record.systolic;
       recordObj["diastolic"] = record.diastolic;
       recordObj["pulse"] = record.pulse;
@@ -614,7 +615,7 @@ public:
     doc["count"] = count;
     if (count > 0) {
       const BPData& latest = recordManager->getLatestRecord();
-      doc["timestamp"] = latest.timestamp;
+      doc["timestamp"] = latest.timestamp.c_str();
       doc["systolic"] = latest.systolic;
       doc["diastolic"] = latest.diastolic;
       doc["pulse"] = latest.pulse;
@@ -623,9 +624,11 @@ public:
       doc["diaBad"] = isDiastolicAbnormal(latest.diastolic);
       doc["pulBad"] = isPulseAbnormal(latest.pulse);
     }
+    // transportName/Status 是 main loop 共享指標，可能在請求中途被覆寫；保險用 copy
     doc["transport_name"] = *transportName;
     doc["transport_status"] = *transportStatus;
-    doc["wifi_ip"] = (WiFi.status() == WL_CONNECTED) ? WiFi.localIP().toString() : String("");
+    String wifiIp = (WiFi.status() == WL_CONNECTED) ? WiFi.localIP().toString() : String("");
+    doc["wifi_ip"] = wifiIp;
 
     String jsonStr;
     serializeJson(doc, jsonStr);
