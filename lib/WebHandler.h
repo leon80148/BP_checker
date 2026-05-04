@@ -579,6 +579,9 @@ public:
           "bpKpi('kpi-pul','pill-pul',d.pulse,d.pulBad,v&&d.pulse>0);"
           "const u=document.getElementById('last-updated');"
           "if(u)u.textContent='最後更新：'+d.timestamp+'（每 3 秒刷新）';"
+        "}else if(document.getElementById('kpi-sys')){"
+          // count 從 >0 變回 0（例如剛清歷史）：reload 切換到 empty state，避免殘留舊卡片
+          "location.reload();return;"
         "}}catch(e){}"
       "}"
       "function bpKpi(iv,ip,v,bad,ok){"
