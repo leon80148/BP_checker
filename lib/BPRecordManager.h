@@ -95,11 +95,11 @@ private:
   }
 
 public:
-  BP_RecordManager(int maxRecords = 10) : _maxRecords(maxRecords) {
-    _records = new BPData[_maxRecords];
-    _historyIndex = 0;
-    _recordCount = 0;
-  }
+  explicit BP_RecordManager(int maxRecords = 10)
+    : _maxRecords(maxRecords),
+      _records(new BPData[maxRecords]),
+      _historyIndex(0),
+      _recordCount(0) {}
 
   ~BP_RecordManager() {
     delete[] _records;
