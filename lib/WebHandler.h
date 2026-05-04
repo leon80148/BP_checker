@@ -607,7 +607,10 @@ public:
     html += F(
       "<script>"
       "async function bpRefresh(){"
-        "try{const r=await fetch('/api/latest');if(!r.ok)return;"
+        "try{"
+        // 切走 tab 時 browser 會 throttle 但仍 fire；明確 skip 省 device 處理
+        "if(document.hidden)return;"
+        "const r=await fetch('/api/latest');if(!r.ok)return;"
         "const d=await r.json();"
         "const t=document.getElementById('conn-transport');if(t)t.textContent=d.transport_name;"
         "const s=document.getElementById('conn-status');if(s)s.textContent=d.transport_status;"
