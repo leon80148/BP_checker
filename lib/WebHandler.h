@@ -687,11 +687,12 @@ public:
       doc["diaBad"] = isDiastolicAbnormal(latest.diastolic);
       doc["pulBad"] = isPulseAbnormal(latest.pulse);
     }
-    // transportName/Status 是 main loop 共享指標，可能在請求中途被覆寫；保險用 copy
-    doc["transport_name"] = *transportName;
-    doc["transport_status"] = *transportStatus;
+    // 整個 request handler 與 syncTransportStatus 都在 main loop 序列執行，
+    // 不會發生 mid-request mutation，可直接 c_str() 引用省 pool 複製
+    doc["transport_name"] = transportName->c_str();
+    doc["transport_status"] = transportStatus->c_str();
     String wifiIp = (WiFi.status() == WL_CONNECTED) ? WiFi.localIP().toString() : String("");
-    doc["wifi_ip"] = wifiIp;
+    doc["wifi_ip"] = wifiIp.c_str();
 
     String jsonStr;
     serializeJson(doc, jsonStr);
@@ -700,6 +701,7 @@ public:
 
   void handleClearHistory() {
     recordManager->clearRecords();
+    *lastData = ""; // 同步清掉殘留 raw HTML，避免 dashboard 顯示陳舊資料
 
     String html = buildPageStart("記錄已清除", "/history", false, "<meta http-equiv='refresh' content='2;url=/history'>");
     html += "<section class='panel danger-zone'>";
