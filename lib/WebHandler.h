@@ -60,19 +60,19 @@ private:
     return out;
   }
 
-  // 表格中單一欄位：對 invalid record 顯示 "—" 並用中性樣式，避免 -1 紅字
-  String renderTableValueCell(int value, bool valid, bool (WebHandler::*abnormalFn)(int) const) const {
+  // 表格中單一欄位：對 invalid record 顯示 "—" 並用中性樣式，避免 -1 紅字。
+  // 直接 append 進 out，免每次呼叫都建一個 ~48 byte 的回傳 String 暫物件
+  // （20 筆 × 3 欄 × 兩個表格 ≈ 120 個 alloc/render）。
+  void renderTableValueCell(String& out, int value, bool valid,
+                            bool (WebHandler::*abnormalFn)(int) const) const {
     bool ok = valid && value > 0;
-    if (!ok) return "<td class='value-na'>—</td>";
+    if (!ok) { out += "<td class='value-na'>—</td>"; return; }
     bool bad = (this->*abnormalFn)(value);
-    String s;
-    s.reserve(48);
-    s += "<td class='";
-    s += valueClass(bad);
-    s += "'>";
-    s += value; // int append 用 String 內建 overload，免 String(value) 暫物件
-    s += "</td>";
-    return s;
+    out += "<td class='";
+    out += valueClass(bad);
+    out += "'>";
+    out += value; // int append 用 String 內建 overload，免 String(value) 暫物件
+    out += "</td>";
   }
 
   // KPI 卡片：valueOk=false 顯示 "—" + 中性 pill，避免 -1 之類無效數值被誤判為異常
@@ -543,9 +543,9 @@ private:
         html += "<tr><td>";
         html += record.timestamp;
         html += "</td>";
-        html += renderTableValueCell(record.systolic, record.valid, &WebHandler::isSystolicAbnormal);
-        html += renderTableValueCell(record.diastolic, record.valid, &WebHandler::isDiastolicAbnormal);
-        html += renderTableValueCell(record.pulse, record.valid, &WebHandler::isPulseAbnormal);
+        renderTableValueCell(html, record.systolic, record.valid, &WebHandler::isSystolicAbnormal);
+        renderTableValueCell(html, record.diastolic, record.valid, &WebHandler::isDiastolicAbnormal);
+        renderTableValueCell(html, record.pulse, record.valid, &WebHandler::isPulseAbnormal);
         html += "</tr>";
       }
 
@@ -674,9 +674,9 @@ private:
         html += "<tr><td>";
         html += record.timestamp;
         html += "</td>";
-        html += renderTableValueCell(record.systolic, record.valid, &WebHandler::isSystolicAbnormal);
-        html += renderTableValueCell(record.diastolic, record.valid, &WebHandler::isDiastolicAbnormal);
-        html += renderTableValueCell(record.pulse, record.valid, &WebHandler::isPulseAbnormal);
+        renderTableValueCell(html, record.systolic, record.valid, &WebHandler::isSystolicAbnormal);
+        renderTableValueCell(html, record.diastolic, record.valid, &WebHandler::isDiastolicAbnormal);
+        renderTableValueCell(html, record.pulse, record.valid, &WebHandler::isPulseAbnormal);
         // rawData 僅存於 RAM，重啟後從 NVS 載入的記錄沒有原始位元組；
         // 沒資料就顯示 dash，避免使用者點進去看到空白頁
         if (record.rawData.length() > 0) {
