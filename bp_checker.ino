@@ -119,6 +119,9 @@ void loop() {
   // 檢查TTL串口通訊活動狀態
   dataProcessor->checkActivity();
 
+  // 偵測 STA 上線並延遲啟動 mDNS
+  wifiManager->tick();
+
   // 非阻塞 reset button：按住 3 秒才重置，避免誤觸卡 loop
   static unsigned long resetPressStart = 0;
   if (digitalRead(RESET_PIN) == LOW) {

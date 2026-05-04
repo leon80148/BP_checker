@@ -27,64 +27,37 @@ public:
     delete[] _records;
   }
   
-  // 添加新的血壓記錄
-  void addRecord(BPData record) {
-    // 添加到環形緩衝區
+  // 添加新的血壓記錄（const ref 避免複製含 String 的結構）
+  void addRecord(const BPData& record) {
     _records[_historyIndex] = record;
     _historyIndex = (_historyIndex + 1) % _maxRecords;
     if (_recordCount < _maxRecords) _recordCount++;
-    
-    // 保存到非易失性存儲
     saveToStorage();
   }
-  
-  // 獲取某個指定位置的記錄
+
+  // 獲取某個指定位置的記錄（0 = 最新）
   BPData getRecord(int index) {
     if (index < 0 || index >= _recordCount) {
-      // 返回無效數據
-      BPData emptyData;
-      emptyData.systolic = -1;
-      emptyData.diastolic = -1;
-      emptyData.pulse = -1;
-      emptyData.valid = false;
-      return emptyData;
+      return BPData{}; // 預設值: systolic/diastolic/pulse=-1, valid=false
     }
-    
     int actualIndex = (_historyIndex - index - 1 + _maxRecords) % _maxRecords;
     return _records[actualIndex];
   }
-  
-  // 獲取最新的記錄
+
   BPData getLatestRecord() {
-    if (_recordCount == 0) {
-      // 返回無效數據
-      BPData emptyData;
-      emptyData.systolic = -1;
-      emptyData.diastolic = -1;
-      emptyData.pulse = -1;
-      emptyData.valid = false;
-      return emptyData;
-    }
-    
-    return _records[(_historyIndex - 1 + _maxRecords) % _maxRecords];
+    return getRecord(0);
   }
-  
-  // 獲取記錄數量
-  int getRecordCount() {
-    return _recordCount;
-  }
-  
-  // 獲取最大記錄數量
-  int getMaxRecords() {
-    return _maxRecords;
-  }
-  
-  // 清除所有記錄
+
+  int getRecordCount() { return _recordCount; }
+  int getMaxRecords() { return _maxRecords; }
+
+  // 清除所有記錄（in-memory + 持久化）
   void clearRecords() {
     _historyIndex = 0;
     _recordCount = 0;
-    
-    // 清除存儲
+    for (int i = 0; i < _maxRecords; i++) {
+      _records[i] = BPData{};
+    }
     _preferences.begin(_namespace.c_str(), false);
     _preferences.clear();
     _preferences.end();

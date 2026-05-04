@@ -12,18 +12,20 @@ private:
   WebServer* server;
   Preferences* preferences;
   WebHandler* webHandler;
-  
+
   const char* ap_ssid;
   const char* ap_password;
   const char* hostname;
-  
+
   String sta_ssid;
   String sta_password;
-  
+
   bool apMode;
-  
+  bool serverStarted;
+  bool mdnsStarted;
+
 public:
-  WiFiManager(WebServer* server, Preferences* preferences, 
+  WiFiManager(WebServer* server, Preferences* preferences,
               const char* ap_ssid, const char* ap_password, const char* hostname) {
     this->server = server;
     this->preferences = preferences;
@@ -31,99 +33,107 @@ public:
     this->ap_password = ap_password;
     this->hostname = hostname;
     this->apMode = false;
+    this->serverStarted = false;
+    this->mdnsStarted = false;
     this->webHandler = nullptr;
   }
-  
+
   void setWebHandler(WebHandler* webHandler) {
     this->webHandler = webHandler;
   }
-  
+
   void loadCredentials() {
     preferences->begin("wifi-config", false);
     sta_ssid = preferences->getString("ssid", "");
     sta_password = preferences->getString("password", "");
     preferences->end();
   }
-  
+
   bool hasCredentials() {
     return sta_ssid != "";
   }
-  
+
   void startAPMode() {
     apMode = true;
     Serial.println("進入AP模式設定...");
-    
-    // 設置AP模式
+
     WiFi.mode(WIFI_AP);
     WiFi.softAP(ap_ssid, ap_password);
-    
+
     IPAddress myIP = WiFi.softAPIP();
     Serial.print("AP IP地址: ");
     Serial.println(myIP);
-    
-    // 啟動網頁伺服器
-    server->begin();
-    
+
+    startServerOnce();
+
     Serial.println("HTTP伺服器已啟動");
     Serial.println("請連接到WiFi: " + String(ap_ssid) + "，密碼: " + String(ap_password));
     Serial.println("然後開啟瀏覽器訪問: " + myIP.toString());
   }
-  
-  void connectToWiFi() {
-    Serial.println("嘗試連接到WiFi...");
-    // 使用AP+STA雙模式，保持AP可訪問
-    WiFi.mode(WIFI_AP_STA);
 
-    // 維持AP熱點開啟
+  // 啟動 STA 連線（不阻塞）；webserver 立即上線，
+  // 連線完成後 tick() 會啟動 mDNS。
+  void connectToWiFi() {
+    Serial.println("嘗試連接到WiFi（背景）...");
+    WiFi.mode(WIFI_AP_STA);
     WiFi.softAP(ap_ssid, ap_password);
     IPAddress apIP = WiFi.softAPIP();
-    Serial.print("AP模式IP地址: ");
+    Serial.print("AP IP地址: ");
     Serial.println(apIP);
 
-    // 啟用自動重連，避免長時間運行後 STA 斷線無法恢復
     WiFi.setAutoReconnect(true);
     WiFi.persistent(true);
-
-    // 嘗試連接到已設定的WiFi
     WiFi.begin(sta_ssid.c_str(), sta_password.c_str());
 
-    // 嘗試連接WiFi，最多嘗試20秒（使用 200ms 輪詢縮短偵測延遲）
-    int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 100) {
+    // 短暫等待 STA 即時連線（最多 ~2s），讓常見快速連線情境能在開機時就好
+    for (int i = 0; i < 10 && WiFi.status() != WL_CONNECTED; i++) {
       delay(200);
-      if (attempts % 5 == 0) Serial.print(".");
-      attempts++;
+      Serial.print(".");
     }
-    
+
+    // 不論連線是否成功，webserver 與 AP 都立即可用
+    startServerOnce();
+    Serial.println();
     if (WiFi.status() == WL_CONNECTED) {
-      Serial.println("\n已連接到WiFi");
-      Serial.print("IP地址: ");
-      Serial.println(WiFi.localIP());
-      
-      // 設置mDNS服務
-      if(MDNS.begin(hostname)) {
-        Serial.println("mDNS已啟動，可通過 http://" + String(hostname) + ".local 訪問");
-      } else {
-        Serial.println("mDNS服務啟動失敗");
-      }
-      
-      // 啟動網頁伺服器
-      server->begin();
-      
-      Serial.println("\n\n===== ESP32 血壓機 WiFi 轉發器 =====");
-      Serial.println("設備名稱: ESP32_BP_Monitor");
-      Serial.print("WiFi IP 地址: ");
-      Serial.println(WiFi.localIP());
-      Serial.println("等待數據中...");
+      tick(); // 觸發 mDNS / log
     } else {
-      Serial.println("\nWiFi連接失敗，僅使用AP模式");
-      // 已經在設置AP模式，無需重新啟動AP
+      Serial.println("STA 尚未連上，背景持續嘗試；AP/webserver 已上線。");
     }
   }
-  
+
+  // 主 loop 持續呼叫；偵測 STA 連線狀態變化並啟動 mDNS。
+  void tick() {
+    if (mdnsStarted) return;
+    if (WiFi.status() != WL_CONNECTED) return;
+
+    Serial.println("已連接到WiFi");
+    Serial.print("IP地址: ");
+    Serial.println(WiFi.localIP());
+
+    if (MDNS.begin(hostname)) {
+      Serial.println("mDNS已啟動，可通過 http://" + String(hostname) + ".local 訪問");
+    } else {
+      Serial.println("mDNS服務啟動失敗");
+    }
+    mdnsStarted = true;
+
+    Serial.println("\n===== ESP32 血壓機 WiFi 轉發器 =====");
+    Serial.println("設備名稱: ESP32_BP_Monitor");
+    Serial.print("WiFi IP 地址: ");
+    Serial.println(WiFi.localIP());
+    Serial.println("等待數據中...");
+  }
+
   String getStaSsid() { return sta_ssid; }
   String getStaPassword() { return sta_password; }
   bool isApMode() { return apMode; }
+
+private:
+  void startServerOnce() {
+    if (serverStarted) return;
+    server->begin();
+    serverStarted = true;
+  }
 };
 
 #endif 

@@ -136,7 +136,10 @@ private:
   }
 
   String buildPageStart(const String& title, const String& activePath, bool autoRefresh = false, const String& extraHead = "") {
-    String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
+    String html;
+    // CSS ~4.5KB + head/nav 樣板 ~700B；預留避免每個 += 觸發 realloc
+    html.reserve(6144);
+    html = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
     html += "<title>" + title + "</title>";
     html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
     if (autoRefresh) {
@@ -242,7 +245,9 @@ public:
     js += "}";
     js += "</script>";
 
-    String html = buildPageStart("WiFi 設定", "/config", false, js);
+    String html;
+    html.reserve(8192); // 含 CSS + scan 結果 dropdown
+    html = buildPageStart("WiFi 設定", "/config", false, js);
     html += "<section class='panel form-shell'>";
     html += "<h2>網路連線設定</h2>";
     html += "<p class='helper-text'>選擇可用 WiFi，或使用手動輸入 SSID。儲存後裝置會自動重啟並嘗試連線。</p>";
@@ -382,7 +387,9 @@ public:
   }
 
   void handleMonitor() {
-    String html = buildPageStart("血壓監控儀表板", "/", true);
+    String html;
+    html.reserve(8192); // CSS ~4.5KB + dashboard body ~3KB
+    html = buildPageStart("血壓監控儀表板", "/", true);
 
     int recordCount = recordManager->getRecordCount();
     if (recordCount > 0) {
@@ -483,7 +490,9 @@ public:
   }
 
   void handleHistory() {
-    String html = buildPageStart("血壓歷史記錄", "/history");
+    String html;
+    html.reserve(8192); // CSS ~4.5KB + 20 列表 + danger zone ~3KB
+    html = buildPageStart("血壓歷史記錄", "/history");
 
     html += "<section class='panel history-table'>";
     html += "<div class='section-head'>";
