@@ -673,8 +673,9 @@ public:
 
   void handleHistoryAPI() {
     // ArduinoJson v6：傳 String 進去會 copy 進 doc pool；改用 c_str() 直接引用，
-    // 在 single-thread handler 內 BPData 不會被修改，pointer 安全。20 筆省 ~420B pool。
-    StaticJsonDocument<3072> doc;
+    // 在 single-thread handler 內 BPData 不會被修改，pointer 安全。
+    // 20 筆 × (object overhead 72B + 數值欄位)≈ 1600B，2048 足夠且省 1KB loopTask stack。
+    StaticJsonDocument<2048> doc;
     JsonArray records = doc.createNestedArray("records");
 
     int recordCount = recordManager->getRecordCount();
