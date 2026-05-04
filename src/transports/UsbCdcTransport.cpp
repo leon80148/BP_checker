@@ -279,8 +279,15 @@ void UsbCdcTransport::poll() {
         .bParityType = 0,
         .bDataBits = 8,
       };
-      cdc_acm_host_line_coding_set(handle, &lineCoding);
-      cdc_acm_host_set_control_line_state(handle, true, true);
+      // 不檢查回傳會讓 baud/control-line 設定失敗時看起來連線成功但資料解析全錯
+      // 補上 detail 訊息，使用者在 dashboard 看到就知道問題在 CDC 配置而非血壓機本身
+      esp_err_t lcRet = cdc_acm_host_line_coding_set(handle, &lineCoding);
+      esp_err_t clsRet = cdc_acm_host_set_control_line_state(handle, true, true);
+      if (lcRet != ESP_OK || clsRet != ESP_OK) {
+        impl->currentDetail = "CDC opened but config failed (lc=" +
+                              String(static_cast<int>(lcRet)) +
+                              ", cls=" + String(static_cast<int>(clsRet)) + ")";
+      }
       break;
     }
   }
