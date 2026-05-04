@@ -198,6 +198,7 @@ public:
     // 添加歷史記錄相關API
     server->on("/history", HTTP_GET, [this]() { this->handleHistory(); });
     server->on("/api/history", HTTP_GET, [this]() { this->handleHistoryAPI(); });
+    server->on("/api/latest", HTTP_GET, [this]() { this->handleLatestAPI(); });
     // 破壞性操作改為 POST，避免瀏覽器 link prefetch、爬蟲、誤點 GET 觸發。
     server->on("/clear_history", HTTP_POST, [this]() { this->handleClearHistory(); });
 
@@ -404,7 +405,9 @@ public:
   void handleMonitor() {
     String html;
     html.reserve(8192); // CSS ~4.5KB + dashboard body ~3KB
-    html = buildPageStart("血壓監控儀表板", "/", true);
+    // 不再用 meta refresh：JS 每 3 秒 fetch /api/latest 只更新數值節點，
+    // 替代每次重建 ~10KB 整頁 HTML。
+    html = buildPageStart("血壓監控儀表板", "/", false);
 
     int recordCount = recordManager->getRecordCount();
     if (recordCount > 0) {
@@ -416,25 +419,25 @@ public:
 
       html += "<section class='panel latest-vitals'>";
       html += "<div class='section-head'><h2>最新量測</h2>";
-      html += "<span class='last-updated'>最後更新：" + latest.timestamp + "（每 3 秒刷新）</span></div>";
+      html += "<span id='last-updated' class='last-updated'>最後更新：" + latest.timestamp + "（每 3 秒刷新）</span></div>";
       html += "<div class='kpi-grid'>";
 
       html += "<article class='kpi-card'>";
       html += "<div class='kpi-label'><span>收縮壓</span><span>mmHg</span></div>";
-      html += "<div class='kpi-value " + valueClass(systolicBad) + "'>" + String(latest.systolic) + "</div>";
-      html += statePill(systolicBad);
+      html += "<div id='kpi-sys' class='kpi-value " + valueClass(systolicBad) + "'>" + String(latest.systolic) + "</div>";
+      html += "<span id='pill-sys' class='state-pill " + String(systolicBad ? "state-alert" : "state-ok") + "'>" + String(systolicBad ? "異常" : "正常") + "</span>";
       html += "</article>";
 
       html += "<article class='kpi-card'>";
       html += "<div class='kpi-label'><span>舒張壓</span><span>mmHg</span></div>";
-      html += "<div class='kpi-value " + valueClass(diastolicBad) + "'>" + String(latest.diastolic) + "</div>";
-      html += statePill(diastolicBad);
+      html += "<div id='kpi-dia' class='kpi-value " + valueClass(diastolicBad) + "'>" + String(latest.diastolic) + "</div>";
+      html += "<span id='pill-dia' class='state-pill " + String(diastolicBad ? "state-alert" : "state-ok") + "'>" + String(diastolicBad ? "異常" : "正常") + "</span>";
       html += "</article>";
 
       html += "<article class='kpi-card'>";
       html += "<div class='kpi-label'><span>脈搏</span><span>bpm</span></div>";
-      html += "<div class='kpi-value " + valueClass(pulseBad) + "'>" + String(latest.pulse) + "</div>";
-      html += statePill(pulseBad);
+      html += "<div id='kpi-pul' class='kpi-value " + valueClass(pulseBad) + "'>" + String(latest.pulse) + "</div>";
+      html += "<span id='pill-pul' class='state-pill " + String(pulseBad ? "state-alert" : "state-ok") + "'>" + String(pulseBad ? "異常" : "正常") + "</span>";
       html += "</article>";
 
       html += "</div></section>";
@@ -486,9 +489,9 @@ public:
     html += "<ul class='status-list'>";
     html += "<li><span>設備名稱</span><strong>BP_checker</strong></li>";
     html += "<li><span>血壓機型號</span><strong>" + *bp_model + "</strong></li>";
-    html += "<li><span>資料通道</span><strong>" + *transportName + "</strong></li>";
-    html += "<li><span>通道狀態</span><strong>" + *transportStatus + "</strong></li>";
-    html += "<li><span>WiFi IP</span><strong>" + wifiIp + "</strong></li>";
+    html += "<li><span>資料通道</span><strong id='conn-transport'>" + *transportName + "</strong></li>";
+    html += "<li><span>通道狀態</span><strong id='conn-status'>" + *transportStatus + "</strong></li>";
+    html += "<li><span>WiFi IP</span><strong id='conn-ip'>" + wifiIp + "</strong></li>";
     html += "<li><span>可訪問網址</span><strong>http://" + String(*hostname) + ".local</strong></li>";
     html += "<li><span>AP 熱點</span><strong>" + String(*ap_ssid) + " (" + String(*ap_password) + ")</strong></li>";
     html += "</ul>";
@@ -501,6 +504,34 @@ public:
     html += "<button type='submit' class='btn btn-danger'>重置 WiFi 設定</button>";
     html += "</form>";
     html += "</section>";
+
+    // AJAX poll：每 3 秒從 /api/latest 取最新狀態並就地更新 DOM。
+    // 比起原 meta refresh，伺服器端輸出量從 ~10KB 降到 ~300B，heap churn 大減。
+    html += F(
+      "<script>"
+      "async function bpRefresh(){"
+        "try{const r=await fetch('/api/latest');if(!r.ok)return;"
+        "const d=await r.json();"
+        "const t=document.getElementById('conn-transport');if(t)t.textContent=d.transport_name;"
+        "const s=document.getElementById('conn-status');if(s)s.textContent=d.transport_status;"
+        "const ip=document.getElementById('conn-ip');if(ip)ip.textContent=d.wifi_ip||'未連線';"
+        "if(d.count>0){"
+          "if(!document.getElementById('kpi-sys')){location.reload();return;}"
+          "bpKpi('kpi-sys','pill-sys',d.systolic,d.sysBad);"
+          "bpKpi('kpi-dia','pill-dia',d.diastolic,d.diaBad);"
+          "bpKpi('kpi-pul','pill-pul',d.pulse,d.pulBad);"
+          "const u=document.getElementById('last-updated');"
+          "if(u)u.textContent='最後更新：'+d.timestamp+'（每 3 秒刷新）';"
+        "}}catch(e){}"
+      "}"
+      "function bpKpi(iv,ip,v,bad){"
+        "const a=document.getElementById(iv),b=document.getElementById(ip);"
+        "if(a){a.textContent=v;a.className='kpi-value '+(bad?'value-bad':'value-good');}"
+        "if(b){b.textContent=bad?'異常':'正常';b.className='state-pill '+(bad?'state-alert':'state-ok');}"
+      "}"
+      "setInterval(bpRefresh,3000);"
+      "</script>"
+    );
 
     html += buildPageEnd();
     server->send(200, "text/html", html);
@@ -570,6 +601,31 @@ public:
       recordObj["diastolic"] = record.diastolic;
       recordObj["pulse"] = record.pulse;
     }
+
+    String jsonStr;
+    serializeJson(doc, jsonStr);
+    server->send(200, "application/json", jsonStr);
+  }
+
+  // 給 dashboard JS 輪詢用的小型狀態端點，~300 bytes
+  void handleLatestAPI() {
+    StaticJsonDocument<512> doc;
+    int count = recordManager->getRecordCount();
+    doc["count"] = count;
+    if (count > 0) {
+      const BPData& latest = recordManager->getLatestRecord();
+      doc["timestamp"] = latest.timestamp;
+      doc["systolic"] = latest.systolic;
+      doc["diastolic"] = latest.diastolic;
+      doc["pulse"] = latest.pulse;
+      doc["valid"] = latest.valid;
+      doc["sysBad"] = isSystolicAbnormal(latest.systolic);
+      doc["diaBad"] = isDiastolicAbnormal(latest.diastolic);
+      doc["pulBad"] = isPulseAbnormal(latest.pulse);
+    }
+    doc["transport_name"] = *transportName;
+    doc["transport_status"] = *transportStatus;
+    doc["wifi_ip"] = (WiFi.status() == WL_CONNECTED) ? WiFi.localIP().toString() : String("");
 
     String jsonStr;
     serializeJson(doc, jsonStr);
