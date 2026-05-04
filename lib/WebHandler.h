@@ -38,12 +38,12 @@ private:
   }
 
   // 回傳 string literal 不配置 String；renderTableValueCell/renderKpiCard 都是 += 用法
-  const char* valueClass(bool abnormal) {
+  const char* valueClass(bool abnormal) const {
     return abnormal ? "value-bad" : "value-good";
   }
 
   // 針對使用者可控字串做最小 HTML escape，防止 SSID/型號名含 '<' 把後續解讀成 tag
-  String htmlEscape(const String& s) {
+  String htmlEscape(const String& s) const {
     String out;
     out.reserve(s.length());
     for (size_t i = 0; i < s.length(); i++) {
@@ -61,7 +61,7 @@ private:
   }
 
   // 表格中單一欄位：對 invalid record 顯示 "—" 並用中性樣式，避免 -1 紅字
-  String renderTableValueCell(int value, bool valid, bool (WebHandler::*abnormalFn)(int) const) {
+  String renderTableValueCell(int value, bool valid, bool (WebHandler::*abnormalFn)(int) const) const {
     bool ok = valid && value > 0;
     if (!ok) return "<td class='value-na'>—</td>";
     bool bad = (this->*abnormalFn)(value);
@@ -78,7 +78,7 @@ private:
   // KPI 卡片：valueOk=false 顯示 "—" + 中性 pill，避免 -1 之類無效數值被誤判為異常
   String renderKpiCard(const char* idVal, const char* idPill,
                        const char* label, const char* unit,
-                       int value, bool valueOk, bool bad) {
+                       int value, bool valueOk, bool bad) const {
     String html;
     html.reserve(320);
     html += "<article class='kpi-card'>";
@@ -113,7 +113,7 @@ private:
     return html;
   }
 
-  String navLink(const String& href, const String& label, const String& activePath) {
+  String navLink(const String& href, const String& label, const String& activePath) const {
     String s;
     s.reserve(80);
     s += "<a class='top-nav-link";
@@ -126,8 +126,8 @@ private:
     return s;
   }
 
-  const String& sharedStyle() {
-    static String css;
+  const String& sharedStyle() const {
+    static String css; // 函式 local 靜態，與 instance const 性無關
     if (!css.isEmpty()) return css;
     css.reserve(4500);
     css += "<style>";
@@ -212,7 +212,7 @@ private:
     return css;
   }
 
-  String buildPageStart(const String& title, const String& activePath, bool autoRefresh = false, const String& extraHead = "") {
+  String buildPageStart(const String& title, const String& activePath, bool autoRefresh = false, const String& extraHead = "") const {
     String html;
     // CSS ~4.5KB + head/nav 樣板 ~700B；預留避免每個 += 觸發 realloc
     html.reserve(6144);
@@ -239,7 +239,7 @@ private:
     return html;
   }
 
-  String buildPageEnd() {
+  String buildPageEnd() const {
     return "</div></body></html>";
   }
 
