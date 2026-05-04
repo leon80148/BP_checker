@@ -5,6 +5,17 @@
 #include <Preferences.h>
 #include "BP_Parser.h"
 
+// 儲存策略：slot-based
+//
+//   slot_<i>  : 第 i 個物理 slot 的記錄（i 對應 _records[i]）
+//   count     : 目前有效記錄數
+//   index     : _historyIndex（下一個要寫的 slot）
+//   schema    : "v2" 標記新格式；舊格式（rec_*）會在第一次 load 時被遷移
+//
+// 對比舊格式（rec_0=最新，rec_(count-1)=最舊）：每筆 addRecord 必須 rewrite
+// 全部 count 個 rec_* keys；slot-based 只需寫入剛改動的單一 slot + 3 個 metadata。
+// 對於 20 筆 ring buffer，NVS 寫入量從 22 降到 4（包含 schema），長期 flash
+// 損耗約降低 5x。
 class BP_RecordManager {
 private:
   const int _maxRecords;
@@ -12,33 +23,91 @@ private:
   int _historyIndex;
   int _recordCount;
   Preferences _preferences;
-  
-  // 非易失性存儲的命名空間
+
   String _namespace = "bp_records";
-  
+
+  String serializeRecord(const BPData& r) const {
+    return r.timestamp + "|" +
+           String(r.systolic) + "|" +
+           String(r.diastolic) + "|" +
+           String(r.pulse) + "|" +
+           String(r.valid ? 1 : 0);
+  }
+
+  bool parseRecord(const String& recData, BPData& out) const {
+    if (recData.length() == 0) return false;
+    int sep1 = recData.indexOf('|');
+    if (sep1 <= 0) return false;
+    int sep2 = recData.indexOf('|', sep1 + 1);
+    if (sep2 <= 0) return false;
+    int sep3 = recData.indexOf('|', sep2 + 1);
+    if (sep3 <= 0) return false;
+    int sep4 = recData.indexOf('|', sep3 + 1);
+
+    out.timestamp = recData.substring(0, sep1);
+    out.systolic = recData.substring(sep1 + 1, sep2).toInt();
+    out.diastolic = recData.substring(sep2 + 1, sep3).toInt();
+    if (sep4 > 0) {
+      out.pulse = recData.substring(sep3 + 1, sep4).toInt();
+      out.valid = (recData.substring(sep4 + 1).toInt() != 0);
+    } else {
+      // 舊 4 欄格式相容：以數值合理性推導 valid
+      out.pulse = recData.substring(sep3 + 1).toInt();
+      out.valid = (out.systolic > 0 && out.diastolic > 0 && out.pulse > 0);
+    }
+    return true;
+  }
+
+  // 寫入單一 slot + metadata；addRecord 用此快取路徑（4 NVS writes）
+  void saveSlot(int slot) {
+    _preferences.begin(_namespace.c_str(), false);
+    String recData = serializeRecord(_records[slot]);
+    String key = "slot_" + String(slot);
+    _preferences.putString(key.c_str(), recData);
+    _preferences.putInt("count", _recordCount);
+    _preferences.putInt("index", _historyIndex);
+    _preferences.putString("schema", "v2");
+    _preferences.end();
+  }
+
+  // 一次性寫入所有 in-memory slots（migration 用）
+  void saveAllSlots() {
+    if (_recordCount <= 0) return;
+    _preferences.begin(_namespace.c_str(), false);
+    for (int i = 0; i < _recordCount; i++) {
+      String recData = serializeRecord(_records[i]);
+      String key = "slot_" + String(i);
+      _preferences.putString(key.c_str(), recData);
+    }
+    _preferences.putInt("count", _recordCount);
+    _preferences.putInt("index", _historyIndex);
+    _preferences.putString("schema", "v2");
+    _preferences.end();
+  }
+
 public:
   BP_RecordManager(int maxRecords = 10) : _maxRecords(maxRecords) {
     _records = new BPData[_maxRecords];
     _historyIndex = 0;
     _recordCount = 0;
   }
-  
+
   ~BP_RecordManager() {
     delete[] _records;
   }
-  
-  // 添加新的血壓記錄（const ref 避免複製含 String 的結構）
+
   void addRecord(const BPData& record) {
-    _records[_historyIndex] = record;
+    int slot = _historyIndex;
+    _records[slot] = record;
     _historyIndex = (_historyIndex + 1) % _maxRecords;
     if (_recordCount < _maxRecords) _recordCount++;
-    saveToStorage();
+    saveSlot(slot);
   }
 
   // 獲取某個指定位置的記錄（0 = 最新）
   BPData getRecord(int index) {
     if (index < 0 || index >= _recordCount) {
-      return BPData{}; // 預設值: systolic/diastolic/pulse=-1, valid=false
+      return BPData{};
     }
     int actualIndex = (_historyIndex - index - 1 + _maxRecords) % _maxRecords;
     return _records[actualIndex];
@@ -51,7 +120,6 @@ public:
   int getRecordCount() { return _recordCount; }
   int getMaxRecords() { return _maxRecords; }
 
-  // 清除所有記錄（in-memory + 持久化）
   void clearRecords() {
     _historyIndex = 0;
     _recordCount = 0;
@@ -59,84 +127,48 @@ public:
       _records[i] = BPData{};
     }
     _preferences.begin(_namespace.c_str(), false);
-    _preferences.clear();
+    _preferences.clear(); // 同時清掉舊 rec_* 與新 slot_* keys
     _preferences.end();
   }
-  
-  // 從非易失性存儲加載記錄
-  // 儲存格式（newest-first）：rec_0 = 最新，rec_(count-1) = 最舊
-  // 載入時將 rec_i 放到 _records[count-1-i]，配合 _historyIndex = count % max，
-  // 使 circular buffer 中 (_historyIndex - 1 + max) % max 永遠指向最新筆。
+
   void loadFromStorage() {
-    _preferences.begin(_namespace.c_str(), true); // 只讀模式
+    _preferences.begin(_namespace.c_str(), true);
+    String schema = _preferences.getString("schema", "");
+    int storedCount = _preferences.getInt("count", 0);
+    int storedIndex = _preferences.getInt("index", 0);
 
-    _recordCount = _preferences.getInt("count", 0);
-    if (_recordCount > _maxRecords) _recordCount = _maxRecords;
-    if (_recordCount < 0) _recordCount = 0;
+    if (storedCount < 0) storedCount = 0;
+    if (storedCount > _maxRecords) storedCount = _maxRecords;
+    if (storedIndex < 0 || storedIndex >= _maxRecords) storedIndex = 0;
 
-    for (int i = 0; i < _recordCount; i++) {
-      String key = "rec_" + String(i);
-      String recData = _preferences.getString(key.c_str(), "");
-
-      if (recData.length() == 0) continue;
-
-      // 解析記錄格式: timestamp|systolic|diastolic|pulse[|valid]
-      int sep1 = recData.indexOf('|');
-      int sep2 = (sep1 > 0) ? recData.indexOf('|', sep1 + 1) : -1;
-      int sep3 = (sep2 > 0) ? recData.indexOf('|', sep2 + 1) : -1;
-      if (sep1 <= 0 || sep2 <= 0 || sep3 <= 0) continue;
-
-      int sep4 = recData.indexOf('|', sep3 + 1);
-      String timestamp = recData.substring(0, sep1);
-      int systolic = recData.substring(sep1 + 1, sep2).toInt();
-      int diastolic = recData.substring(sep2 + 1, sep3).toInt();
-      int pulse;
-      bool valid;
-      if (sep4 > 0) {
-        pulse = recData.substring(sep3 + 1, sep4).toInt();
-        valid = (recData.substring(sep4 + 1).toInt() != 0);
-      } else {
-        pulse = recData.substring(sep3 + 1).toInt();
-        valid = (systolic > 0 && diastolic > 0 && pulse > 0);
+    if (schema == "v2") {
+      // 新格式：直接以物理 slot 對應 _records[i]
+      _recordCount = storedCount;
+      _historyIndex = storedIndex;
+      for (int i = 0; i < _maxRecords; i++) {
+        String key = "slot_" + String(i);
+        String recData = _preferences.getString(key.c_str(), "");
+        parseRecord(recData, _records[i]); // 失敗則維持 default
       }
+      _preferences.end();
+    } else {
+      // 舊格式 rec_0=newest..rec_(count-1)=oldest；放到 _records[count-1-i]
+      _recordCount = storedCount;
+      for (int i = 0; i < _recordCount; i++) {
+        String key = "rec_" + String(i);
+        String recData = _preferences.getString(key.c_str(), "");
+        if (recData.length() == 0) continue;
+        int slot = _recordCount - 1 - i;
+        parseRecord(recData, _records[slot]);
+      }
+      _historyIndex = _recordCount % _maxRecords;
+      _preferences.end();
 
-      int slot = _recordCount - 1 - i; // 把最新放在最後一格
-      _records[slot].timestamp = timestamp;
-      _records[slot].systolic = systolic;
-      _records[slot].diastolic = diastolic;
-      _records[slot].pulse = pulse;
-      _records[slot].valid = valid;
+      // 一次性 migration：用 v2 格式回寫；舊 rec_* keys 留下不主動清除
+      // （NVS 空間影響微小，clearRecords 才會整體清掉）
+      saveAllSlots();
     }
-
-    _historyIndex = _recordCount % _maxRecords;
-    _preferences.end();
-  }
-
-  // 保存記錄到非易失性存儲（newest-first 格式）
-  // ESP-IDF 的 NVS 對相同字串會跳過實體寫入，因此每次 addRecord 只會真正
-  // 寫入有變動的欄位（通常是 rec_0、count、index），對 flash 損耗影響可控。
-  void saveToStorage() {
-    _preferences.begin(_namespace.c_str(), false);
-
-    _preferences.putInt("count", _recordCount);
-    _preferences.putInt("index", _historyIndex);
-
-    for (int i = 0; i < _recordCount; i++) {
-      int recordIndex = (_historyIndex - i - 1 + _maxRecords) % _maxRecords;
-      const BPData& record = _records[recordIndex];
-
-      String recData = record.timestamp + "|" +
-                       String(record.systolic) + "|" +
-                       String(record.diastolic) + "|" +
-                       String(record.pulse) + "|" +
-                       String(record.valid ? 1 : 0);
-
-      String key = "rec_" + String(i);
-      _preferences.putString(key.c_str(), recData);
-    }
-
-    _preferences.end();
   }
 };
 
-#endif 
+#endif
