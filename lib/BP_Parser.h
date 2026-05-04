@@ -18,19 +18,18 @@ private:
   String _model;
 
 public:
-  BP_Parser(String model) {
+  // const ref 收參數避免 caller→param 多一次 String 複製
+  explicit BP_Parser(const String& model) : _model(model) {}
+
+  void setModel(const String& model) {
     _model = model;
   }
 
-  void setModel(String model) {
-    _model = model;
-  }
-
-  String getModel() {
+  const String& getModel() const {
     return _model;
   }
 
-  BPData parse(const uint8_t* buffer, int length) {
+  BPData parse(const uint8_t* buffer, int length) const {
     BPData result;
     if (_model == "OMRON-HBP9030") {
       result = parseOmronHBP9030(buffer, length);
@@ -62,7 +61,7 @@ public:
 
 private:
   // OMRON HBP-9030 解析邏輯：CSV 格式，第 7/8/9 欄為 SYS/DIA/PUL（0-indexed）
-  BPData parseOmronHBP9030(const uint8_t* buffer, int length) {
+  BPData parseOmronHBP9030(const uint8_t* buffer, int length) const {
     BPData result;
 
     // 一次 memcpy 取代逐 byte append（避免 log(n) 次 String 重新配置）
@@ -99,7 +98,7 @@ private:
   }
 
   // OMRON HBP-1300 解析邏輯
-  BPData parseOmronHBP1300(const uint8_t* buffer, int length) {
+  BPData parseOmronHBP1300(const uint8_t* buffer, int length) const {
     BPData result;
     if (length >= 10 && buffer[0] == 0x01) {
       result.systolic = buffer[2] * 256 + buffer[3];
@@ -110,7 +109,7 @@ private:
   }
 
   // OMRON HEM-7121 解析邏輯（示意實作）
-  BPData parseOmronHEM7121(const uint8_t* buffer, int length) {
+  BPData parseOmronHEM7121(const uint8_t* buffer, int length) const {
     BPData result;
     if (length >= 10) {
       result.systolic = buffer[3];
@@ -121,7 +120,7 @@ private:
   }
 
   // TERUMO ES-P2020 解析邏輯（示意實作）
-  BPData parseTerumoESP2020(const uint8_t* buffer, int length) {
+  BPData parseTerumoESP2020(const uint8_t* buffer, int length) const {
     BPData result;
     if (length >= 8) {
       result.systolic = buffer[2] * 10 + buffer[3];
@@ -132,7 +131,7 @@ private:
   }
 
   // 通用解析邏輯 - 嘗試尋找ASCII格式的數據或其他常見格式
-  BPData parseGeneric(const uint8_t* buffer, int length) {
+  BPData parseGeneric(const uint8_t* buffer, int length) const {
     BPData result;
 
     // 過濾出可列印 ASCII；先 reserve length 避免逐字 append 重新配置
