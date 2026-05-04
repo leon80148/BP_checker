@@ -6,7 +6,11 @@ for token in \
   "app-shell" "top-nav" "panel" "btn" \
   "latest-vitals" "kpi-grid" "recent-table" "<details" "raw-data" "last-updated" \
   "history-table" "danger-zone" "btn-danger" \
-  "form-shell" "field-label" "helper-text" "scan-refresh"
+  "form-shell" "field-label" "helper-text" "scan-refresh" \
+  "value-na" "state-na" \
+  "kpi-sys" "kpi-dia" "kpi-pul" \
+  "conn-transport" "conn-status" "conn-ip" \
+  "/api/latest" "bpRefresh"
 do
   grep -Fq -- "$token" "$FILE" || { echo "missing token: $token"; exit 1; }
 done
