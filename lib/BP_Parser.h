@@ -182,21 +182,21 @@ private:
         diaStr.trim();
         
         // 移除非數字字符
-        for (int i = 0; i < sysStr.length(); i++) {
+        for (unsigned int i = 0; i < sysStr.length(); i++) {
           if (!isdigit(sysStr.charAt(i))) {
             sysStr = sysStr.substring(0, i);
             break;
           }
         }
         
-        for (int i = 0; i < diaStr.length(); i++) {
+        for (unsigned int i = 0; i < diaStr.length(); i++) {
           if (!isdigit(diaStr.charAt(i))) {
             diaStr = diaStr.substring(0, i);
             break;
           }
         }
         
-        for (int i = 0; i < pulStr.length(); i++) {
+        for (unsigned int i = 0; i < pulStr.length(); i++) {
           if (!isdigit(pulStr.charAt(i))) {
             pulStr = pulStr.substring(0, i);
             break;

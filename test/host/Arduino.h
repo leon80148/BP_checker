@@ -1,0 +1,79 @@
+// Minimal Arduino shim for host-side unit tests.
+// 只模擬被測 lib 實際用到的 String 介面；語意對齊 ESP32 Arduino core：
+//   - toInt(): atol 語意（跳過前導空白、遇非數字停止、無效輸入回 0）
+//   - substring(a, b): a > b 時互換，邊界 clamp 到字串長度
+//   - charAt(): 越界回 '\0'
+//   - indexOf(): 找不到回 -1
+// 刻意不模擬記憶體配置失敗與 move 內部行為——host 測試不涵蓋這些。
+#ifndef HOST_ARDUINO_SHIM_H
+#define HOST_ARDUINO_SHIM_H
+
+#include <cctype>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <string>
+
+class String {
+public:
+  String() = default;
+  String(const char* s) : _s(s ? s : "") {}
+  String(const std::string& s) : _s(s) {}
+
+  unsigned int length() const { return (unsigned int)_s.size(); }
+  bool isEmpty() const { return _s.empty(); }
+  const char* c_str() const { return _s.c_str(); }
+
+  void reserve(unsigned int n) { _s.reserve(n); }
+
+  bool concat(const char* p, unsigned int len) {
+    _s.append(p, len);
+    return true;
+  }
+
+  char charAt(unsigned int i) const { return i < _s.size() ? _s[i] : '\0'; }
+
+  String substring(unsigned int from) const {
+    return substring(from, (unsigned int)_s.size());
+  }
+
+  String substring(unsigned int from, unsigned int to) const {
+    if (from > to) { unsigned int t = from; from = to; to = t; }
+    if (from >= _s.size()) return String();
+    if (to > _s.size()) to = (unsigned int)_s.size();
+    return String(_s.substr(from, to - from));
+  }
+
+  void trim() {
+    size_t b = 0, e = _s.size();
+    while (b < e && isspace((unsigned char)_s[b])) b++;
+    while (e > b && isspace((unsigned char)_s[e - 1])) e--;
+    _s = _s.substr(b, e - b);
+  }
+
+  long toInt() const { return atol(_s.c_str()); }
+
+  int indexOf(char c) const { return indexOf(c, 0); }
+  int indexOf(char c, unsigned int from) const {
+    size_t p = _s.find(c, from);
+    return p == std::string::npos ? -1 : (int)p;
+  }
+  int indexOf(const char* sub) const {
+    size_t p = _s.find(sub);
+    return p == std::string::npos ? -1 : (int)p;
+  }
+
+  String& operator+=(char c) { _s.push_back(c); return *this; }
+  String& operator+=(const char* p) { _s.append(p); return *this; }
+  String& operator+=(const String& o) { _s.append(o._s); return *this; }
+  String& operator+=(int v) { _s.append(std::to_string(v)); return *this; }
+
+  bool operator==(const char* p) const { return _s == p; }
+  bool operator==(const String& o) const { return _s == o._s; }
+  bool operator!=(const char* p) const { return _s != p; }
+
+private:
+  std::string _s;
+};
+
+#endif

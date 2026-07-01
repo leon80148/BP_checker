@@ -709,7 +709,7 @@ private:
   void handleHistoryAPI() {
     // ArduinoJson v6：傳 String 進去會 copy 進 doc pool；改用 c_str() 直接引用，
     // 在 single-thread handler 內 BPData 不會被修改，pointer 安全。
-    // 20 筆 × (object overhead 72B + 數值欄位)≈ 1600B，2048 足夠且省 1KB loopTask stack。
+    // 20 筆 × JSON_OBJECT_SIZE(5) + JSON_ARRAY_SIZE(20) ≈ 1936B，2048 足夠且省 1KB loopTask stack。
     StaticJsonDocument<2048> doc;
     JsonArray records = doc.createNestedArray("records");
 
@@ -722,6 +722,7 @@ private:
       recordObj["systolic"] = record.systolic;
       recordObj["diastolic"] = record.diastolic;
       recordObj["pulse"] = record.pulse;
+      recordObj["valid"] = record.valid;
     }
 
     String jsonStr;
@@ -776,7 +777,9 @@ private:
     String id = server->arg("id");
     if (id.length() > 0) {
       const BPData& record = recordManager->getRecord(id.toInt());
-      if (record.valid) {
+      // 與 handleHistory 的連結條件（rawData.length()>0）一致：
+      // invalid 但有原始資料的記錄也要能查看，否則 history 會出現死連結
+      if (record.rawData.length() > 0) {
         String html = buildPageStart("原始數據", "/history");
         html += "<section class='panel raw-data'>";
         html += "<div class='section-head'>";
