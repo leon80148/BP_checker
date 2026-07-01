@@ -128,6 +128,13 @@ static void testDispatchAndValidity() {
   pm.setModel(String("CUSTOM"));
   d = pm.parse(reinterpret_cast<const uint8_t*>("SYS:100,DIA:60,PUL:60"), 21);
   CHECK_TRUE(d.valid, "setModel switches dispatch");
+
+  // line-delimited framing 只適用 ASCII/CSV 型號；binary frame 可能含 0x0A
+  CHECK_TRUE(BP_Parser(String("OMRON-HBP9030")).isLineDelimited(), "HBP9030 is line-delimited");
+  CHECK_TRUE(BP_Parser(String("CUSTOM")).isLineDelimited(), "CUSTOM (generic ascii) is line-delimited");
+  CHECK_TRUE(!BP_Parser(String("OMRON-HBP1300")).isLineDelimited(), "HBP1300 binary not line-delimited");
+  CHECK_TRUE(!BP_Parser(String("OMRON-HEM7121")).isLineDelimited(), "HEM7121 binary not line-delimited");
+  CHECK_TRUE(!BP_Parser(String("TERUMO-ES-P2020")).isLineDelimited(), "Terumo binary not line-delimited");
 }
 
 int main() {

@@ -20,6 +20,17 @@ private:
   bool transportActive = false;
   unsigned long lastTransportActivity = 0;
 
+  // frame assembly：跨 loop() 累積 bytes，line-based 型號以 '\n' 為邊界，
+  // 其餘靠 idle timeout flush。取代舊的「單次 poll 內 blocking 讀完一個 burst」
+  // 模式 —— 不再有 delay(2) 等待迴圈阻塞 webserver，分段到達的 frame 也不會
+  // 被切成多筆垃圾記錄。
+  static constexpr size_t kFrameBufferSize = 256;
+  static constexpr unsigned long kFrameFlushTimeoutMs = 30;
+  uint8_t frameBuf[kFrameBufferSize];
+  size_t frameLen = 0;
+  bool frameOverflowed = false;
+  unsigned long lastByteMs = 0;
+
   // 上次同步的狀態快取，避免每 loop iteration 都重建 transportStatus String
   MonitorTransportState lastSyncedState = TRANSPORT_STATE_STARTING;
   String lastSyncedDetail;
@@ -83,50 +94,64 @@ public:
     transport->poll();
     syncTransportStatus();
 
-    if (transport->available() <= 0) {
-      return false;
-    }
+    bool produced = false;
 
-    // 用 inter-byte timeout 模式讀取，兼顧 UART（bytes 1ms 間隔）與 USB CDC（爆量到達）。
-    // 比起原本每 byte 都 delay(2)，最多只在 byte 間 idle 等候 30ms，避免單次接收阻塞 webserver 200ms。
-    static constexpr int kBufferSize = 100;
-    static constexpr unsigned long kInterByteTimeoutMs = 30;
-    uint8_t buffer[kBufferSize];
-    int byteCount = 0;
-    unsigned long lastByteMs = millis();
-    while (byteCount < kBufferSize) {
-      if (transport->available() > 0) {
-        int incoming = transport->read();
-        if (incoming < 0) break;
-        buffer[byteCount++] = static_cast<uint8_t>(incoming);
-        lastByteMs = millis();
+    // 非阻塞：把目前可讀的 bytes 全部收進 frame buffer，line-based 型號
+    // 遇 '\n' 立即完成一個 frame；其餘 bytes 留在 buffer 等下輪 loop()。
+    while (transport->available() > 0) {
+      int incoming = transport->read();
+      if (incoming < 0) break;
+      lastByteMs = millis();
+      lastTransportActivity = millis();
+      transportActive = true;
+
+      uint8_t b = static_cast<uint8_t>(incoming);
+      if (b == '\n' && bpParser->isLineDelimited()) {
+        if (finishFrame()) produced = true;
         continue;
       }
-      if (millis() - lastByteMs > kInterByteTimeoutMs) break;
-      delay(2);
+      if (frameLen >= kFrameBufferSize) {
+        frameOverflowed = true; // 丟棄超出的 bytes，flush 時標記診斷
+        continue;
+      }
+      frameBuf[frameLen++] = b;
     }
 
-    if (byteCount == 0) {
-      return false; // 不更新 transportActive：實際沒讀到資料
+    // idle timeout flush：binary 型號的唯一 frame 邊界；
+    // line-based 型號漏送換行時的保底
+    if (frameLen > 0 && millis() - lastByteMs > kFrameFlushTimeoutMs) {
+      if (finishFrame()) produced = true;
     }
 
-    // 確認真的讀到 byte 後才標記活動
-    lastTransportActivity = millis();
-    transportActive = true;
+    if (produced) syncTransportStatus();
+    return produced;
+  }
+
+private:
+  // 完成一個 frame：解析、更新 lastData 診斷、只在 parse 成功時持久化。
+  // invalid frame（雜訊/分段殘渣）只留 RAM 診斷，不寫 ring buffer/NVS ——
+  // 避免 flash 損耗與歷史記錄被 "—" 列污染。
+  bool finishFrame() {
+    size_t len = frameLen;
+    bool overflowed = frameOverflowed;
+    frameLen = 0;
+    frameOverflowed = false;
+
+    if (len > 0 && frameBuf[len - 1] == '\r') len--; // CRLF 結尾剝除
+    if (len == 0 && !overflowed) return false;       // 空行（bare CRLF）直接略過
 
     // 解析血壓數據（在組 HTML 之前先做，避免無資料時還浪費字串組裝）
-    BPData parsedData = bpParser->parse(buffer, byteCount);
+    BPData parsedData = bpParser->parse(frameBuf, static_cast<int>(len));
 
     // 用 hex lookup table 避免每 byte 建一次 String(uint8_t, HEX) 臨時物件
     static const char kHex[] = "0123456789abcdef";
-    // 直接寫入 *lastData（取代 dataStr + asciiStr 兩個中介 String + 一次 concat）；
-    // 兩段都 inline 寫入後再 copy 給 parsedData.rawData
+    // 直接寫入 *lastData（取代 dataStr + asciiStr 兩個中介 String + 一次 concat）
     String& target = *lastData;
     target = "";
-    target.reserve(byteCount * 8 + 128);
+    target.reserve(len * 8 + 192);
     target += "<div class='data-section'><h3>原始數據 (十六進制):</h3><pre>";
-    for (int i = 0; i < byteCount; i++) {
-      uint8_t b = buffer[i];
+    for (size_t i = 0; i < len; i++) {
+      uint8_t b = frameBuf[i];
       target += kHex[b >> 4];
       target += kHex[b & 0x0F];
       target += ' ';
@@ -134,8 +159,8 @@ public:
     }
     target += "</pre></div>";
     target += "<div class='data-section'><h3>原始數據 (ASCII):</h3><pre>";
-    for (int i = 0; i < byteCount; i++) {
-      uint8_t b = buffer[i];
+    for (size_t i = 0; i < len; i++) {
+      uint8_t b = frameBuf[i];
       // BP 機若回傳 '<' 等字元會被瀏覽器當 HTML 解析；做最小 escape
       if (b < 32 || b > 126)      target += '.';
       else if (b == '<')          target += "&lt;";
@@ -145,7 +170,11 @@ public:
       if ((i + 1) % 16 == 0) target += "<br>";
     }
     target += "</pre></div>";
-    parsedData.rawData = target;
+    if (overflowed) {
+      target += "<p class='helper-text'>（frame 超過 ";
+      target += static_cast<int>(kFrameBufferSize);
+      target += " bytes 已截斷，此筆不儲存）</p>";
+    }
 
     // 取得台北時區時間
     struct tm timeinfo;
@@ -157,26 +186,29 @@ public:
       parsedData.timestamp = "時間未同步";
     }
 
-    // 移轉 parsedData 進 ring buffer 省一次 ~700B rawData copy；
-    // 我們之後只讀 systolic/diastolic/pulse/valid 這些 trivial 欄位（move 後仍有效）
     int sys = parsedData.systolic;
     int dia = parsedData.diastolic;
     int pul = parsedData.pulse;
-    bool ok = parsedData.valid;
-    recordManager->addRecord(std::move(parsedData));
+    bool ok = parsedData.valid && !overflowed;
+    if (ok) {
+      // 移轉 parsedData 進 ring buffer 省一次 ~700B rawData copy；
+      // 之後只讀 trivial 欄位（move 後仍有效）
+      parsedData.rawData = target;
+      recordManager->addRecord(std::move(parsedData));
+    }
 
     // Serial log 直接 print（內建 buffered IO），避免再配置兩個 String
     Serial.print("接收數據: ");
-    for (int i = 0; i < byteCount; i++) {
-      uint8_t b = buffer[i];
+    for (size_t i = 0; i < len; i++) {
+      uint8_t b = frameBuf[i];
       Serial.print(kHex[b >> 4]);
       Serial.print(kHex[b & 0x0F]);
       Serial.print(' ');
     }
     Serial.println();
     Serial.print("ASCII數據: ");
-    for (int i = 0; i < byteCount; i++) {
-      uint8_t b = buffer[i];
+    for (size_t i = 0; i < len; i++) {
+      uint8_t b = frameBuf[i];
       Serial.print((b >= 32 && b <= 126) ? (char)b : '.');
     }
     Serial.println();
@@ -188,15 +220,16 @@ public:
       Serial.print(dia);
       Serial.print(" PUL=");
       Serial.println(pul);
+    } else if (overflowed) {
+      Serial.println("frame 超過緩衝上限已截斷，不儲存此筆");
     } else {
-      Serial.println("無法解析為有效的血壓數據，但已儲存原始數據");
+      Serial.println("無法解析為有效的血壓數據，僅保留原始診斷（不寫入歷史）");
     }
-    Serial.println("數據已準備，可通過網頁查看");
     Serial.println("----------------------------------");
-    syncTransportStatus();
-
     return true;
   }
+
+public:
 
   // processIncomingData 會在 loop 開頭就呼叫 poll/syncTransportStatus，
   // 所以這裡只負責偵測 idle 狀態，不再重複 poll。

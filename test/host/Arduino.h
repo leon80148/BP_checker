@@ -12,7 +12,43 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <string>
+
+// ---- fake clock：millis()/delay() 不真的睡，測試可用 delay() 快轉 ----
+inline unsigned long& __millisCounter() {
+  static unsigned long v = 0;
+  return v;
+}
+inline unsigned long millis() { return __millisCounter(); }
+inline void delay(unsigned long ms) { __millisCounter() += ms; }
+
+// ---- 可控 getLocalTime（ESP32 core 函式）----
+inline bool& __fakeTimeValid() {
+  static bool v = false;
+  return v;
+}
+inline struct tm& __fakeTm() {
+  static struct tm t = {};
+  return t;
+}
+inline bool getLocalTime(struct tm* info) {
+  if (!__fakeTimeValid()) return false;
+  *info = __fakeTm();
+  return true;
+}
+
+// ---- Serial stub：吃掉所有輸出 ----
+class HostSerial {
+public:
+  void begin(unsigned long) {}
+  template <typename T>
+  void print(const T&) {}
+  template <typename T>
+  void println(const T&) {}
+  void println() {}
+};
+inline HostSerial Serial;
 
 class String {
 public:

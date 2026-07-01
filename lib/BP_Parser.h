@@ -29,6 +29,14 @@ public:
     return _model;
   }
 
+  // line-delimited framing 只適用 ASCII/CSV 型號；
+  // binary 型號的 frame 內容可能剛好含 0x0A，不能用換行當 frame 邊界
+  bool isLineDelimited() const {
+    return !(_model == "OMRON-HBP1300" ||
+             _model == "OMRON-HEM7121" ||
+             _model == "TERUMO-ES-P2020");
+  }
+
   BPData parse(const uint8_t* buffer, int length) const {
     BPData result;
     if (_model == "OMRON-HBP9030") {
