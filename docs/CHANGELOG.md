@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-07-02
+
+### 測試基礎設施
+- 新增 host-side 單元測試：`scripts/run_host_tests.sh` 以本機 clang++ 編譯
+  header-only lib，`test/host/` 內含 Arduino String / Preferences shim 與
+  fake MonitorTransport。覆蓋 BP_Parser、DataProcessor frame assembly、
+  BPRecordManager 儲存層、WebSecurity，共 165 個檢查。
+
+### 韌體
+- DataProcessor 改為非阻塞 frame assembly：line-based 型號以換行為 frame
+  邊界（CRLF 剝除），binary 型號以 30ms idle timeout flush；跨 loop 分段
+  到達的 frame 不再被切成多筆垃圾記錄，也移除了阻塞 webserver 的等待迴圈。
+- 持久化政策改為「只儲存解析成功的量測」：invalid frame 與超過 256 bytes
+  的截斷 frame 只保留在 RAM 診斷區（減少 NVS 損耗、歷史不再出現 "—" 列）。
+- `/config` 的 WiFi 掃描改為 async：頁面立即渲染上次結果，掃描於背景進行。
+
+### 網頁安全
+- `/reset`、`/configure`、`/set_bp_model`、`/clear_history` 加入 CSRF
+  same-origin 檢查（Origin/Referer 與 Host 比對，跨源一律 403）。
+- 儀表板不再顯示 AP 密碼。
+- `/raw_data` 的 id 參數改嚴格解析，垃圾輸入回 400（原本會誤中 record 0）。
+- 修正 history 頁「查看原始數據」對 invalid 記錄產生死連結的問題；
+  `/api/history` 回應加入 `valid` 欄位。
+
 ## 2026-03-14
 
 ### Documentation

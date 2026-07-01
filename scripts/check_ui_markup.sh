@@ -6,7 +6,7 @@ for token in \
   "app-shell" "top-nav" "panel" "btn" \
   "latest-vitals" "kpi-grid" "recent-table" "<details" "raw-data" "last-updated" \
   "history-table" "danger-zone" "btn-danger" \
-  "form-shell" "field-label" "helper-text" "scan-refresh" \
+  "form-shell" "field-label" "helper-text" "scan-refresh" "掃描中" \
   "value-na" "state-na" \
   "kpi-sys" "kpi-dia" "kpi-pul" \
   "conn-transport" "conn-status" "conn-ip" \

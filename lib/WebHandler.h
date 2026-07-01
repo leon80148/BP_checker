@@ -320,18 +320,41 @@ private:
 
   // 以下 handle* 都只在 setupRoutes 內以 lambda 連接到 route，無外部 caller。
   void handleRoot() {
-    // WiFi.scanNetworks() 同步阻塞 ~5 秒；快取 20 秒避免每次 /config 都重掃。
-    // 顯式加 ?rescan=1 才強制重掃（重新掃描按鈕會帶這參數）。
-    static unsigned long lastScanMs = 0;
-    static int lastScanCount = -1;
+    // 同步版 WiFi.scanNetworks() 會阻塞 loop ~2-5 秒，此時血壓機若送資料
+    // 可能在 driver buffer 溢出。改 async：頁面立即用上次完成的掃描結果
+    // 渲染，掃描在背景進行，完成後下次載入頁面時收割進快取。
+    static String cachedOptions; // 上次完成掃描的 <option> 清單
+    static bool scanEverDone = false;
+
+    int scanState = WiFi.scanComplete();
+    if (scanState >= 0) {
+      // 掃描完成：複製進自己的快取後立即 scanDelete 釋放結果記憶體
+      cachedOptions = "";
+      for (int i = 0; i < scanState; ++i) {
+        int quality = 2 * (WiFi.RSSI(i) + 100);
+        if (quality > 100) quality = 100;
+        if (quality < 0) quality = 0;
+
+        // 鄰近 AP 廣播的 SSID 屬於外部輸入，可能含 ' " < 等字元；escape 後寫入
+        String safeSsid = htmlEscape(WiFi.SSID(i));
+        cachedOptions += "<option value='" + safeSsid + "'>";
+        cachedOptions += safeSsid + " (" + quality + "%";
+        if (WiFi.encryptionType(i) == WIFI_AUTH_OPEN) {
+          cachedOptions += " 開放";
+        }
+        cachedOptions += ")</option>";
+      }
+      WiFi.scanDelete();
+      scanEverDone = true;
+      scanState = WIFI_SCAN_FAILED; // 收割後回到 idle 狀態
+    }
+
+    bool scanRunning = (scanState == WIFI_SCAN_RUNNING);
     bool forceRescan = (server->arg("rescan") == "1");
-    int n;
-    if (forceRescan || lastScanCount < 0 || millis() - lastScanMs > 20000) {
-      n = WiFi.scanNetworks();
-      lastScanCount = n;
-      lastScanMs = millis();
-    } else {
-      n = lastScanCount;
+    // 只在使用者要求或還沒有任何結果時才啟動掃描；掃描進行中不重複啟動
+    if (!scanRunning && (forceRescan || !scanEverDone)) {
+      WiFi.scanNetworks(true); // async，結果由之後的請求收割
+      scanRunning = true;
     }
 
     // 編譯期合併字面量（adjacent string literal concatenation）一次配置 String
@@ -355,27 +378,19 @@ private:
     html += "<label class='field-label' for='wifi-select'>WiFi 網路</label>";
     html += "<select id='wifi-select' name='ssid' onchange='toggleManualSSID()'>";
 
-    if (n == 0) {
+    if (cachedOptions.length() > 0) {
+      html += cachedOptions;
+    } else if (scanEverDone) {
       html += "<option value=''>找不到 WiFi 網路</option>";
     } else {
-      for (int i = 0; i < n; ++i) {
-        int quality = 2 * (WiFi.RSSI(i) + 100);
-        if (quality > 100) quality = 100;
-        if (quality < 0) quality = 0;
-
-        // 鄰近 AP 廣播的 SSID 屬於外部輸入，可能含 ' " < 等字元；escape 後寫入
-        String safeSsid = htmlEscape(WiFi.SSID(i));
-        html += "<option value='" + safeSsid + "'>";
-        html += safeSsid + " (" + quality + "%";
-        if (WiFi.encryptionType(i) == WIFI_AUTH_OPEN) {
-          html += " 開放";
-        }
-        html += ")</option>";
-      }
+      html += "<option value=''>掃描中...</option>";
     }
 
     html += "<option value='manual'>手動輸入...</option>";
     html += "</select>";
+    if (scanRunning) {
+      html += "<p class='helper-text'>背景掃描中，稍後重新整理頁面可取得最新清單。</p>";
+    }
     html += "<p class='helper-text'>若掃描列表中沒有目標網路，請改用手動輸入。</p>";
 
     html += "<input type='text' id='manual-ssid' name='manual_ssid' placeholder='輸入 WiFi 名稱' style='display:none'>";
