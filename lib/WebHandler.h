@@ -7,6 +7,7 @@
 #include <WiFi.h>
 #include "BPRecordManager.h"
 #include "BP_Parser.h"
+#include "WebSecurity.h"
 
 // 處理網頁請求的類
 class WebHandler {
@@ -23,7 +24,6 @@ private:
   // 用單層 const char* 即可，省一層 indirection
   const char* hostname;
   const char* ap_ssid;
-  const char* ap_password;
 
   bool isSystolicAbnormal(int value) const {
     return value > 130 || value < 90;
@@ -246,7 +246,7 @@ public:
   WebHandler(WebServer* server, Preferences* preferences, BP_RecordManager* recordManager,
              BP_Parser* bpParser,
              String* bp_model, String* lastData, String* transportName, String* transportStatus,
-             const char* hostname, const char* ap_ssid, const char* ap_password)
+             const char* hostname, const char* ap_ssid)
     : server(server),
       preferences(preferences),
       recordManager(recordManager),
@@ -256,10 +256,13 @@ public:
       transportName(transportName),
       transportStatus(transportStatus),
       hostname(hostname),
-      ap_ssid(ap_ssid),
-      ap_password(ap_password) {}
+      ap_ssid(ap_ssid) {}
 
   void setupRoutes() {
+    // CSRF 檢查需要的 headers（Host 由 WebServer 內建解析，走 hostHeader()）
+    static const char* kCollectHeaders[] = {"Origin", "Referer"};
+    server->collectHeaders(kCollectHeaders, 2);
+
     server->on("/", HTTP_GET, [this]() { this->handleMonitor(); });
     server->on("/config", HTTP_GET, [this]() { this->handleRoot(); });
     server->on("/configure", HTTP_POST, [this]() { this->handleConfigure(); });
@@ -283,6 +286,7 @@ public:
     server->on("/raw_data", HTTP_GET, [this]() { this->handleRawData(); });
 
     server->on("/reset", HTTP_POST, [this]() {
+      if (this->csrfBlocked()) return;
       // 只清 WiFi 相關 keys，保留 bp_model（與 UI 標籤一致）
       preferences->begin("wifi-config", false);
       preferences->remove("ssid");
@@ -303,6 +307,17 @@ public:
   }
 
 private:
+  // 破壞性/設定變更 POST 的 CSRF 守門：跨源（或 Origin:null / 格式錯誤）
+  // 一律 403。純比對邏輯在 WebSecurity.h（host 可測）。
+  bool csrfBlocked() {
+    if (csrfCheckPasses(server->header("Origin"), server->header("Referer"),
+                        server->hostHeader())) {
+      return false;
+    }
+    server->send(403, "text/plain; charset=UTF-8", "跨來源請求被拒絕");
+    return true;
+  }
+
   // 以下 handle* 都只在 setupRoutes 內以 lambda 連接到 route，無外部 caller。
   void handleRoot() {
     // WiFi.scanNetworks() 同步阻塞 ~5 秒；快取 20 秒避免每次 /config 都重掃。
@@ -395,6 +410,7 @@ private:
   }
 
   void handleConfigure() {
+    if (csrfBlocked()) return;
     String new_ssid;
     String new_password = server->arg("password");
 
@@ -473,6 +489,7 @@ private:
   }
 
   void handleSetBpModel() {
+    if (csrfBlocked()) return;
     String new_model = server->arg("model");
 
     if (new_model.length() > 0) {
@@ -590,11 +607,10 @@ private:
     html += "<li><span>可訪問網址</span><strong>http://";
     html += hostname; // const char* via String += overload, no temporary
     html += ".local</strong></li>";
+    // AP 密碼不顯示在頁面上（任何連上網頁的人都看得到 dashboard）
     html += "<li><span>AP 熱點</span><strong>";
     html += ap_ssid;
-    html += " (";
-    html += ap_password;
-    html += ")</strong></li>";
+    html += "</strong></li>";
     html += "</ul>";
     html += "</section>";
 
@@ -760,6 +776,7 @@ private:
   }
 
   void handleClearHistory() {
+    if (csrfBlocked()) return;
     recordManager->clearRecords();
     *lastData = ""; // 同步清掉殘留 raw HTML，避免 dashboard 顯示陳舊資料
 
@@ -774,9 +791,10 @@ private:
   }
 
   void handleRawData() {
-    String id = server->arg("id");
-    if (id.length() > 0) {
-      const BPData& record = recordManager->getRecord(id.toInt());
+    // 嚴格解析：toInt() 會把 "abc" 變 0 而誤中 record 0
+    int idx = parseIndexParam(server->arg("id"));
+    if (idx >= 0) {
+      const BPData& record = recordManager->getRecord(idx);
       // 與 handleHistory 的連結條件（rawData.length()>0）一致：
       // invalid 但有原始資料的記錄也要能查看，否則 history 會出現死連結
       if (record.rawData.length() > 0) {

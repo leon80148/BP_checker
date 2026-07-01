@@ -57,7 +57,7 @@ void setup() {
   webHandler = new WebHandler(&server, &preferences, &recordManager,
                              &bpParser,
                              &bp_model, &lastData, &transportName, &transportStatus,
-                             hostname, ap_ssid, ap_password);
+                             hostname, ap_ssid);
   
   wifiManager = new WiFiManager(&server, &preferences, 
                                ap_ssid, ap_password, hostname);
