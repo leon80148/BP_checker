@@ -11,27 +11,10 @@
 //
 // 執行：bash scripts/run_host_tests.sh
 
-#include <cstdio>
 #include <cstring>
 
 #include "lib/BP_Parser.h"
-
-static int g_failures = 0;
-static int g_checks = 0;
-
-#define CHECK_EQ(actual, expected, label)                                      \
-  do {                                                                         \
-    g_checks++;                                                                \
-    auto _a = (actual);                                                        \
-    auto _e = (expected);                                                      \
-    if (!(_a == _e)) {                                                         \
-      g_failures++;                                                            \
-      printf("FAIL %s:%d  %s  (got %ld, want %ld)\n", __FILE__, __LINE__,     \
-             label, (long)_a, (long)_e);                                       \
-    }                                                                          \
-  } while (0)
-
-#define CHECK_TRUE(cond, label) CHECK_EQ((cond) ? 1 : 0, 1, label)
+#include "test_support.h"
 
 static BPData parseWith(const char* model, const char* payload) {
   BP_Parser parser{String(model)};
@@ -152,11 +135,5 @@ int main() {
   testHbp9030();
   testGeneric();
   testDispatchAndValidity();
-
-  if (g_failures == 0) {
-    printf("OK: %d checks passed.\n", g_checks);
-    return 0;
-  }
-  printf("FAILED: %d/%d checks failed.\n", g_failures, g_checks);
-  return 1;
+  return testReport();
 }
