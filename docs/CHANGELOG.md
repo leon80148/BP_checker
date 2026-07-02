@@ -17,6 +17,10 @@
 - `/config` 的 WiFi 掃描改為 async：頁面立即渲染上次結果，掃描於背景進行。
 
 ### 網頁安全
+- CSRF 防護加入 DNS rebinding 檢查（codex review P1）：Host header 必須是
+  裝置自身身分（AP IP / STA IP / mDNS 主機名）才受理變更類 POST。
+  注意：若以自訂 DNS 名稱存取裝置，變更操作會被 403，請改用 IP 或
+  `bp_checker.local`。
 - 新增管理密碼（PIN）：於 `/config` 設定後，WiFi 設定、型號切換、清除
   記錄、重置都需附密碼（4-16 字元，NVS `admin_pin`）。未設定時行為不變。
   忘記密碼的救援路徑：長按 GPIO0 3 秒（連同 WiFi 設定一併清除）。

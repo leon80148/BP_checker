@@ -96,6 +96,13 @@ public:
 
     bool produced = false;
 
+    // 先 flush 閒置逾時的舊 frame 再讀新 bytes：若新資料已排隊，
+    // 後讀會讓舊 partial 殘渣與新 frame 合併成一個壞 frame
+    // （binary 型號只靠 timeout 斷界，最受影響）
+    if (frameLen > 0 && millis() - lastByteMs > kFrameFlushTimeoutMs) {
+      if (finishFrame()) produced = true;
+    }
+
     // 非阻塞：把目前可讀的 bytes 全部收進 frame buffer，line-based 型號
     // 遇 '\n' 立即完成一個 frame；其餘 bytes 留在 buffer 等下輪 loop()。
     while (transport->available() > 0) {

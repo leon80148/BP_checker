@@ -320,7 +320,19 @@ public:
 private:
   // 破壞性/設定變更 POST 的 CSRF 守門：跨源（或 Origin:null / 格式錯誤）
   // 一律 403。純比對邏輯在 WebSecurity.h（host 可測）。
+  // 兩層檢查：(1) Host 必須是裝置自身身分（防 DNS rebinding —— 攻擊者
+  // 網域解析到裝置 IP 時 Origin 與 Host 一致但都不是裝置）；
+  // (2) Origin/Referer 與 Host 同源。
   bool csrfBlocked() {
+    String staIp;
+    if (WiFi.status() == WL_CONNECTED) staIp = WiFi.localIP().toString();
+    String mdnsName(hostname);
+    mdnsName += ".local";
+    if (!hostIsDevice(server->hostHeader(), WiFi.softAPIP().toString(),
+                      staIp, mdnsName)) {
+      server->send(403, "text/plain; charset=UTF-8", "無效的主機名稱");
+      return true;
+    }
     if (csrfCheckPasses(server->header("Origin"), server->header("Referer"),
                         server->hostHeader())) {
       return false;

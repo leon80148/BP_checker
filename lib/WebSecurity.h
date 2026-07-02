@@ -30,15 +30,33 @@ inline String __stripDefaultPort(const String& hostPort) {
   return hostPort;
 }
 
+// 小寫化 + 去除預設 :80，供 host:port 等值比對
+inline String __normalizeHostPort(const String& raw) {
+  String h;
+  for (unsigned int i = 0; i < raw.length(); i++) {
+    h += (char)tolower((unsigned char)raw.charAt(i));
+  }
+  return __stripDefaultPort(h);
+}
+
 inline bool __urlMatchesHost(const String& url, const String& hostHeader) {
   if (hostHeader.length() == 0) return false; // 無從比對 → 拒絕
   String u = __stripDefaultPort(__hostPortOf(url));
   if (u.length() == 0) return false; // 格式錯誤 → 拒絕
-  String h;
-  for (unsigned int i = 0; i < hostHeader.length(); i++) {
-    h += (char)tolower((unsigned char)hostHeader.charAt(i));
-  }
-  return u == __stripDefaultPort(h);
+  return u == __normalizeHostPort(hostHeader);
+}
+
+// DNS rebinding 防護（codex review P1）：光比 Origin==Host 不夠，攻擊者的
+// 網域可以解析到裝置 IP，讓兩者一致。Host 必須命中裝置自身身分之一
+// （AP IP / STA IP / mDNS 主機名）。未連上 STA 時傳空字串即不參與比對。
+inline bool hostIsDevice(const String& hostHeader, const String& apIp,
+                         const String& staIp, const String& mdnsHost) {
+  if (hostHeader.length() == 0) return false;
+  String h = __normalizeHostPort(hostHeader);
+  if (apIp.length() > 0 && h == __normalizeHostPort(apIp)) return true;
+  if (staIp.length() > 0 && h == __normalizeHostPort(staIp)) return true;
+  if (mdnsHost.length() > 0 && h == __normalizeHostPort(mdnsHost)) return true;
+  return false;
 }
 
 // CSRF same-origin 檢查：

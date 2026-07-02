@@ -127,6 +127,29 @@ static void testBinaryFrameWithNewlineByte() {
   CHECK_EQ(w.records.getLatestRecord().systolic, 120, "binary sys");
 }
 
+// codex review P2：閒置逾時的舊 partial frame 必須在讀新 bytes「之前」先
+// flush，否則舊殘渣會與剛到的新 frame 合併成一個壞 frame（binary 型號只靠
+// timeout 斷界，最受影響）。
+static void testStaleFrameNotMergedWithNewBurst() {
+  World w;
+  w.parser.setModel(String("OMRON-HBP1300"));
+  const uint8_t stale[] = {0xFF, 0xFF, 0xFF}; // 垃圾殘渣（非 0x01 開頭）
+  w.transport.feedBytes(stale, sizeof(stale));
+  w.proc.processIncomingData();
+  CHECK_EQ(w.records.getRecordCount(), 0, "stale partial buffered, no record");
+
+  delay(60); // 舊 frame 已閒置逾時，但下次 poll 前新 frame 已排隊
+  const uint8_t fresh[] = {0x01, 0x00, 0x00, 0x78, 0x00, 0x50,
+                           0x00, 0x48, 0x00, 0x00};
+  w.transport.feedBytes(fresh, sizeof(fresh));
+  w.proc.processIncomingData();
+  delay(60);
+  w.proc.processIncomingData(); // flush 新 frame
+
+  CHECK_EQ(w.records.getRecordCount(), 1, "stale junk flushed separately, fresh frame parsed");
+  CHECK_EQ(w.records.getLatestRecord().systolic, 120, "fresh frame not contaminated by stale bytes");
+}
+
 // ---- S3: 只持久化 valid ----
 static void testInvalidFrameNotPersisted() {
   World w;
@@ -194,6 +217,7 @@ int main() {
   testTwoFramesInOneBurst();
   testTimeoutFlushValidFrame();
   testBinaryFrameWithNewlineByte();
+  testStaleFrameNotMergedWithNewBurst();
   testInvalidFrameNotPersisted();
   testOverflowDropped();
   testLastDataEscapingAndTimestamp();

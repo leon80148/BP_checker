@@ -51,6 +51,26 @@ static void testCsrfCheck() {
              "bad origin not rescued by good referer");
 }
 
+// S1b. DNS rebinding 防護（codex review P1）：Origin==Host 不夠 —— 攻擊者
+//      可讓自己的網域解析到裝置 IP，此時兩者一致但都不是裝置身分。
+//      Host 必須命中裝置自身身分 allowlist（AP IP / STA IP / mDNS 主機名，
+//      大小寫不敏感、:80 視為預設）。
+static void testHostIsDevice() {
+  String apIp("192.168.4.1"), staIp("192.168.1.50"), mdns("bp_checker.local");
+
+  CHECK_TRUE(hostIsDevice(String("192.168.4.1"), apIp, staIp, mdns), "AP IP -> allow");
+  CHECK_TRUE(hostIsDevice(String("192.168.1.50"), apIp, staIp, mdns), "STA IP -> allow");
+  CHECK_TRUE(hostIsDevice(String("bp_checker.local"), apIp, staIp, mdns), "mDNS name -> allow");
+  CHECK_TRUE(hostIsDevice(String("BP_checker.local"), apIp, staIp, mdns), "mDNS case-insensitive");
+  CHECK_TRUE(hostIsDevice(String("192.168.4.1:80"), apIp, staIp, mdns), "default :80 -> allow");
+
+  CHECK_TRUE(!hostIsDevice(String("evil.example"), apIp, staIp, mdns), "foreign host -> reject");
+  CHECK_TRUE(!hostIsDevice(String("192.168.4.1:8080"), apIp, staIp, mdns), "other port -> reject");
+  CHECK_TRUE(!hostIsDevice(String(), apIp, staIp, mdns), "missing Host -> reject");
+  CHECK_TRUE(!hostIsDevice(String("192.168.1.50"), apIp, String(), mdns),
+             "stale STA IP after disconnect -> reject");
+}
+
 // S3. 管理密碼（PIN）：未設定（stored 空）→ 一律放行（向後相容）；
 //     已設定 → 必須完全相符。格式限 4-16 個可見 ASCII 字元。
 static void testPinCheck() {
@@ -85,6 +105,7 @@ static void testParseIndexParam() {
 
 int main() {
   testCsrfCheck();
+  testHostIsDevice();
   testPinCheck();
   testIsValidPin();
   testParseIndexParam();
