@@ -17,6 +17,10 @@
 - `/config` 的 WiFi 掃描改為 async：頁面立即渲染上次結果，掃描於背景進行。
 
 ### 網頁安全
+- 新增管理密碼（PIN）：於 `/config` 設定後，WiFi 設定、型號切換、清除
+  記錄、重置都需附密碼（4-16 字元，NVS `admin_pin`）。未設定時行為不變。
+  忘記密碼的救援路徑：長按 GPIO0 3 秒（連同 WiFi 設定一併清除）。
+  部署時建議立即設定 —— 未設定期間任何連上網頁的人都能先設定。
 - `/reset`、`/configure`、`/set_bp_model`、`/clear_history` 加入 CSRF
   same-origin 檢查（Origin/Referer 與 Host 比對，跨源一律 403）。
 - 儀表板不再顯示 AP 密碼。

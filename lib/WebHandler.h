@@ -24,6 +24,9 @@ private:
   // 用單層 const char* 即可，省一層 indirection
   const char* hostname;
   const char* ap_ssid;
+  // 管理密碼快取：所有變更都經由本類（/set_pin）或重啟（GPIO 清除），
+  // 快取不會失同步；避免每次頁面渲染/守門都開 NVS
+  String adminPin;
 
   bool isSystolicAbnormal(int value) const {
     return value > 130 || value < 90;
@@ -263,6 +266,10 @@ public:
     static const char* kCollectHeaders[] = {"Origin", "Referer"};
     server->collectHeaders(kCollectHeaders, 2);
 
+    preferences->begin("wifi-config", true);
+    adminPin = preferences->getString("admin_pin", "");
+    preferences->end();
+
     server->on("/", HTTP_GET, [this]() { this->handleMonitor(); });
     server->on("/config", HTTP_GET, [this]() { this->handleRoot(); });
     server->on("/configure", HTTP_POST, [this]() { this->handleConfigure(); });
@@ -282,12 +289,16 @@ public:
     server->on("/bp_model", HTTP_GET, [this]() { this->handleBpModelPage(); });
     server->on("/set_bp_model", HTTP_POST, [this]() { this->handleSetBpModel(); });
 
+    // 管理密碼設定
+    server->on("/set_pin", HTTP_POST, [this]() { this->handleSetPin(); });
+
     // 添加原始資料顯示路由
     server->on("/raw_data", HTTP_GET, [this]() { this->handleRawData(); });
 
     server->on("/reset", HTTP_POST, [this]() {
       if (this->csrfBlocked()) return;
-      // 只清 WiFi 相關 keys，保留 bp_model（與 UI 標籤一致）
+      if (this->pinBlocked()) return;
+      // 只清 WiFi 相關 keys，保留 bp_model 與 admin_pin（與 UI 標籤一致）
       preferences->begin("wifi-config", false);
       preferences->remove("ssid");
       preferences->remove("password");
@@ -316,6 +327,23 @@ private:
     }
     server->send(403, "text/plain; charset=UTF-8", "跨來源請求被拒絕");
     return true;
+  }
+
+  // 管理密碼守門：未設定 PIN 時放行（向後相容）；設定後破壞性/設定變更
+  // POST 必須附正確的 pin 欄位。失敗加短延遲抑制暴力嘗試（不做鎖定計數
+  // 器 —— 會變成 DoS 途徑）。
+  bool pinBlocked() {
+    if (pinCheckPasses(server->arg("pin"), adminPin)) return false;
+    delay(500);
+    server->send(403, "text/plain; charset=UTF-8", "管理密碼錯誤");
+    return true;
+  }
+
+  // 已設定管理密碼時，在受保護表單內渲染 PIN 輸入欄
+  void renderPinField(String& out) const {
+    if (adminPin.length() == 0) return;
+    out += "<label class='field-label'>管理密碼</label>";
+    out += "<input type='password' name='pin' placeholder='輸入管理密碼' autocomplete='current-password' required>";
   }
 
   // 以下 handle* 都只在 setupRoutes 內以 lambda 連接到 route，無外部 caller。
@@ -398,6 +426,8 @@ private:
     html += "<label class='field-label' for='wifi-password'>WiFi 密碼</label>";
     html += "<input id='wifi-password' type='password' name='password' placeholder='輸入 WiFi 密碼'>";
 
+    renderPinField(html);
+
     html += "<div class='inline-actions'>";
     html += "<button class='btn' type='submit'>儲存並連接</button>";
     html += "<a class='btn btn-secondary scan-refresh' href='/config?rescan=1'>重新掃描 WiFi</a>";
@@ -419,6 +449,24 @@ private:
     }
 
     html += "</section>";
+
+    // 管理密碼設定：設定後所有設定變更/破壞性操作都需要 PIN。
+    // 注意：未設定期間任何連上網頁的人都能先設走 —— 首次部署時就該設定；
+    // 忘記密碼的救援路徑是長按裝置 Reset 鈕 3 秒（一併清除 PIN）。
+    html += "<section class='panel form-shell'>";
+    html += "<h2>管理密碼</h2>";
+    html += "<p class='helper-text'>設定後，WiFi 設定、型號切換、清除記錄與重置操作都需輸入此密碼。忘記密碼可長按裝置 Reset 鈕 3 秒清除。建議部署時立即設定。</p>";
+    html += "<form method='post' action='/set_pin'>";
+    if (adminPin.length() > 0) {
+      html += "<label class='field-label'>目前密碼</label>";
+      html += "<input type='password' name='current_pin' placeholder='輸入目前管理密碼' autocomplete='current-password' required>";
+    }
+    html += "<label class='field-label'>新密碼（4-16 字元，留空 = 移除密碼）</label>";
+    html += "<input type='password' name='new_pin' placeholder='輸入新管理密碼' autocomplete='new-password'>";
+    html += "<button class='btn' type='submit'>儲存管理密碼</button>";
+    html += "</form>";
+    html += "</section>";
+
     html += buildPageEnd();
 
     server->send(200, "text/html; charset=UTF-8", html);
@@ -426,6 +474,7 @@ private:
 
   void handleConfigure() {
     if (csrfBlocked()) return;
+    if (pinBlocked()) return;
     String new_ssid;
     String new_password = server->arg("password");
 
@@ -491,6 +540,7 @@ private:
     if (*bp_model == "CUSTOM") html += " selected";
     html += ">自定義格式</option>";
     html += "</select>";
+    renderPinField(html);
     html += "<button class='btn' type='submit'>儲存設定</button>";
     html += "</form>";
     html += "<div class='panel' style='margin:14px 0 0;padding:14px 16px;'>";
@@ -505,6 +555,7 @@ private:
 
   void handleSetBpModel() {
     if (csrfBlocked()) return;
+    if (pinBlocked()) return; // 選錯型號會靜默破壞解析，不算無害操作
     String new_model = server->arg("model");
 
     if (new_model.length() > 0) {
@@ -633,6 +684,7 @@ private:
     html += "<h3>維護操作</h3>";
     html += "<p class='helper-text'>若要重新配網，可重置 WiFi 設定並重啟。</p>";
     html += "<form method='post' action='/reset' onsubmit=\"return confirm('確定要重置 WiFi 設定並重啟嗎？');\" style='display:inline'>";
+    renderPinField(html);
     html += "<button type='submit' class='btn btn-danger'>重置 WiFi 設定</button>";
     html += "</form>";
     html += "</section>";
@@ -729,6 +781,7 @@ private:
     html += "<h3>危險操作</h3>";
     html += "<p class='helper-text'>此操作會清除全部歷史資料且無法復原。</p>";
     html += "<form method='post' action='/clear_history' onsubmit=\"return confirm('確定要清除所有歷史記錄嗎？');\" style='display:inline'>";
+    renderPinField(html);
     html += "<button type='submit' class='btn btn-danger'>清除記錄</button>";
     html += "</form>";
     html += "</section>";
@@ -790,8 +843,41 @@ private:
     server->send(200, "application/json", jsonStr);
   }
 
+  void handleSetPin() {
+    if (csrfBlocked()) return;
+    // 已設定 PIN 時，變更/移除都要先驗證目前密碼
+    if (!pinCheckPasses(server->arg("current_pin"), adminPin)) {
+      delay(500);
+      server->send(403, "text/plain; charset=UTF-8", "目前管理密碼錯誤");
+      return;
+    }
+    String newPin = server->arg("new_pin");
+    if (newPin.length() > 0 && !isValidPin(newPin)) {
+      server->send(400, "text/plain; charset=UTF-8", "無效的管理密碼（需 4-16 個非空白字元）");
+      return;
+    }
+
+    preferences->begin("wifi-config", false);
+    if (newPin.length() == 0) {
+      preferences->remove("admin_pin");
+    } else {
+      preferences->putString("admin_pin", newPin);
+    }
+    preferences->end();
+    adminPin = newPin;
+
+    String html = buildPageStart("管理密碼已更新", "/config", false, "<meta http-equiv='refresh' content='2;url=/config'>");
+    html += "<section class='panel'>";
+    html += (newPin.length() > 0) ? "<h2>管理密碼已設定</h2>" : "<h2>管理密碼已移除</h2>";
+    html += "<p class='helper-text'>正在返回設定頁面...</p>";
+    html += "</section>";
+    html += buildPageEnd();
+    server->send(200, "text/html; charset=UTF-8", html);
+  }
+
   void handleClearHistory() {
     if (csrfBlocked()) return;
+    if (pinBlocked()) return;
     recordManager->clearRecords();
     *lastData = ""; // 同步清掉殘留 raw HTML，避免 dashboard 顯示陳舊資料
 

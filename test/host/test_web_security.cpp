@@ -51,6 +51,27 @@ static void testCsrfCheck() {
              "bad origin not rescued by good referer");
 }
 
+// S3. 管理密碼（PIN）：未設定（stored 空）→ 一律放行（向後相容）；
+//     已設定 → 必須完全相符。格式限 4-16 個可見 ASCII 字元。
+static void testPinCheck() {
+  CHECK_TRUE(pinCheckPasses(String(), String()), "no pin configured -> allow");
+  CHECK_TRUE(pinCheckPasses(String("whatever"), String()), "no pin ignores provided");
+  CHECK_TRUE(pinCheckPasses(String("1234"), String("1234")), "matching pin -> allow");
+  CHECK_TRUE(!pinCheckPasses(String("0000"), String("1234")), "wrong pin -> reject");
+  CHECK_TRUE(!pinCheckPasses(String(), String("1234")), "missing pin -> reject");
+  CHECK_TRUE(!pinCheckPasses(String("12345"), String("1234")), "prefix+extra -> reject");
+}
+
+static void testIsValidPin() {
+  CHECK_TRUE(isValidPin(String("1234")), "4 digits ok");
+  CHECK_TRUE(isValidPin(String("abcDEF1234567890")), "16 chars ok");
+  CHECK_TRUE(isValidPin(String("p@ss-w0rd!")), "symbols ok");
+  CHECK_TRUE(!isValidPin(String("123")), "too short");
+  CHECK_TRUE(!isValidPin(String("12345678901234567")), "too long");
+  CHECK_TRUE(!isValidPin(String("ab cd")), "space rejected");
+  CHECK_TRUE(!isValidPin(String("")), "empty rejected");
+}
+
 static void testParseIndexParam() {
   CHECK_EQ(parseIndexParam(String("0")), 0, "index 0");
   CHECK_EQ(parseIndexParam(String("19")), 19, "index 19");
@@ -64,6 +85,8 @@ static void testParseIndexParam() {
 
 int main() {
   testCsrfCheck();
+  testPinCheck();
+  testIsValidPin();
   testParseIndexParam();
   return testReport();
 }

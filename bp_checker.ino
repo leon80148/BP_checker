@@ -123,16 +123,18 @@ void loop() {
   wifiManager->tick();
 
   // 非阻塞 reset button：按住 3 秒才重置，避免誤觸卡 loop
-  // 只清 ssid/password，保留 bp_model 等其他設定（與 UI 標籤「重置 WiFi 設定」一致）
+  // 清 ssid/password 與 admin_pin（實體按鈕 = 忘記管理密碼的救援路徑），
+  // 保留 bp_model 等其他設定
   static unsigned long resetPressStart = 0;
   if (digitalRead(kResetPin) == LOW) {
     if (resetPressStart == 0) {
       resetPressStart = millis();
     } else if (millis() - resetPressStart >= 3000) {
-      Serial.println("重置WiFi設定...");
+      Serial.println("重置WiFi設定與管理密碼...");
       preferences.begin("wifi-config", false);
       preferences.remove("ssid");
       preferences.remove("password");
+      preferences.remove("admin_pin");
       preferences.end();
       ESP.restart();
     }

@@ -7,6 +7,7 @@ for token in \
   "latest-vitals" "kpi-grid" "recent-table" "<details" "raw-data" "last-updated" \
   "history-table" "danger-zone" "btn-danger" \
   "form-shell" "field-label" "helper-text" "scan-refresh" "掃描中" \
+  "/set_pin" "管理密碼" "current_pin" "new_pin" \
   "value-na" "state-na" \
   "kpi-sys" "kpi-dia" "kpi-pul" \
   "conn-transport" "conn-status" "conn-ip" \

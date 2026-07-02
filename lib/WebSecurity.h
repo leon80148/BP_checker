@@ -58,6 +58,24 @@ inline bool csrfCheckPasses(const String& origin, const String& referer,
   return true;
 }
 
+// 管理密碼（PIN）檢查：stored 為空 = 功能未啟用，一律放行（向後相容）；
+// 已設定則必須完全相符。plaintext + String 等值比對即可 —— 威脅模型是
+// 診所 LAN 上的誤操作/惡作劇，flash 讀出與 timing attack 不在範圍內。
+inline bool pinCheckPasses(const String& provided, const String& stored) {
+  if (stored.length() == 0) return true;
+  return provided == stored;
+}
+
+// PIN 格式：4-16 個可見 ASCII 字元（不含空白）
+inline bool isValidPin(const String& s) {
+  if (s.length() < 4 || s.length() > 16) return false;
+  for (unsigned int i = 0; i < s.length(); i++) {
+    char c = s.charAt(i);
+    if (c < 33 || c > 126) return false;
+  }
+  return true;
+}
+
 // 嚴格解析非負整數索引：非純數字（空、負號、尾隨字母、前導空白）回 -1。
 // String::toInt() 會把 "abc" 變 0、"12abc" 變 12，直接用會讓垃圾輸入
 // 命中 record 0。長度 >6 視為異常（索引不可能那麼大）。
