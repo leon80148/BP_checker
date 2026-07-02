@@ -7,6 +7,7 @@
 #include <WiFi.h>
 #include "BPRecordManager.h"
 #include "BP_Parser.h"
+#include "CsvExport.h"
 #include "WebSecurity.h"
 
 // 處理網頁請求的類
@@ -280,6 +281,9 @@ public:
 
     // 添加歷史記錄相關API
     server->on("/history", HTTP_GET, [this]() { this->handleHistory(); });
+    // CSV 匯出：唯讀，信任等級與 /api/history 一致（LAN 上未認證可讀，
+    // 屬既有取捨；含批量量測資料，網路隔離由部署端負責）
+    server->on("/export.csv", HTTP_GET, [this]() { this->handleExportCsv(); });
     server->on("/api/history", HTTP_GET, [this]() { this->handleHistoryAPI(); });
     server->on("/api/latest", HTTP_GET, [this]() { this->handleLatestAPI(); });
     // 破壞性操作改為 POST，避免瀏覽器 link prefetch、爬蟲、誤點 GET 觸發。
@@ -756,7 +760,10 @@ private:
     html += "<section class='panel history-table'>";
     html += "<div class='section-head'>";
     html += "<h2>所有歷史數據</h2>";
+    html += "<div class='inline-actions'>";
+    html += "<a href='/export.csv' class='btn btn-secondary'>匯出 CSV</a>";
     html += "<a href='/' class='btn btn-ghost'>返回監控</a>";
+    html += "</div>";
     html += "</div>";
 
     html += "<table>";
@@ -885,6 +892,13 @@ private:
     html += "</section>";
     html += buildPageEnd();
     server->send(200, "text/html; charset=UTF-8", html);
+  }
+
+  void handleExportCsv() {
+    String csv;
+    appendHistoryCsv(csv, *recordManager);
+    server->sendHeader("Content-Disposition", "attachment; filename=\"bp_history.csv\"");
+    server->send(200, "text/csv; charset=UTF-8", csv);
   }
 
   void handleClearHistory() {

@@ -56,7 +56,7 @@ frame 邊界模式由 `BP_Parser::isLineDelimited()` 決定：binary 型號
 
 **Wi-Fi**：無 credential 進 AP 模式（`ESP32_BP_checker` / `192.168.4.1`）；有則連線並啟 mDNS (`bp_checker.local`)。`WiFiManager.tick()` 在 loop 偵測 STA 上線後才延遲啟動 mDNS。GPIO0 長按 3 秒清 ssid/password/admin_pin（實體救援路徑）、保留 bp_model。
 
-**Web routes**（`WebHandler::setupRoutes`）：`/` = 即時監看頁、`/config` = Wi-Fi 設定、`/history`、`/bp_model`、`/raw_data`；API：`/api/latest`、`/api/history`。前端用 JS 每 3 秒 fetch `/api/latest` 就地更新 DOM，無 meta refresh。破壞性/設定變更 POST 走 `csrfBlocked()` + `pinBlocked()`（`lib/WebSecurity.h`：same-origin 檢查跨源 403；管理密碼 NVS `admin_pin`，未設定 = 放行）；`/set_pin` 設定/移除管理密碼；`/config` 的 WiFi 掃描是 async（頁面渲染上次結果，背景掃描）。
+**Web routes**（`WebHandler::setupRoutes`）：`/` = 即時監看頁、`/config` = Wi-Fi 設定、`/history`、`/bp_model`、`/raw_data`、`/export.csv`（歷史 CSV 匯出）；API：`/api/latest`、`/api/history`。前端用 JS 每 3 秒 fetch `/api/latest` 就地更新 DOM，無 meta refresh。破壞性/設定變更 POST 走 `csrfBlocked()` + `pinBlocked()`（`lib/WebSecurity.h`：same-origin 檢查跨源 403；管理密碼 NVS `admin_pin`，未設定 = 放行）；`/set_pin` 設定/移除管理密碼；`/config` 的 WiFi 掃描是 async（頁面渲染上次結果，背景掃描）。
 
 ## 編碼慣例（重要）
 

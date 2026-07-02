@@ -5,7 +5,7 @@ for token in \
   "--bg" "--surface" "--primary" \
   "app-shell" "top-nav" "panel" "btn" \
   "latest-vitals" "kpi-grid" "recent-table" "<details" "raw-data" "last-updated" \
-  "history-table" "danger-zone" "btn-danger" \
+  "history-table" "danger-zone" "btn-danger" "/export.csv" "匯出 CSV" \
   "form-shell" "field-label" "helper-text" "scan-refresh" "掃描中" \
   "/set_pin" "管理密碼" "current_pin" "new_pin" \
   "value-na" "state-na" \

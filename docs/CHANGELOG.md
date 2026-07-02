@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-07-03
+
+### 功能
+- 新增 `/export.csv`：歷史記錄 CSV 匯出（UTF-8 BOM + 中文標題、CRLF、
+  全欄位引號、時間升冪、略過 legacy invalid 記錄）；歷史頁新增
+  「匯出 CSV」按鈕。唯讀端點，信任等級與 `/api/history` 一致。
+
 ## 2026-07-02
 
 ### 測試基礎設施
