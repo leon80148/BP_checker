@@ -129,9 +129,11 @@ private:
     const int minute = parseDigits(buffer, 14, 2);
     if (!validCalendar(year, month, day, hour, minute)) return result;
 
-    result.transientSubjectId.reserve(20);
-    result.transientSubjectId.concat(
-      reinterpret_cast<const char*>(buffer + 17), 20);
+    if (!result.transientSubjectId.reserve(20) ||
+        !result.transientSubjectId.concat(
+          reinterpret_cast<const char*>(buffer + 17), 20)) {
+      return BPParseResult{};
+    }
 
     char timestamp[20];
     memcpy(timestamp, buffer, 4);
@@ -147,7 +149,10 @@ private:
     timestamp[17] = '0';
     timestamp[18] = '0';
     timestamp[19] = '\0';
-    result.measurement.timestamp = timestamp;
+    if (!result.measurement.timestamp.reserve(19) ||
+        !result.measurement.timestamp.concat(timestamp, 19)) {
+      return BPParseResult{};
+    }
     result.measurement.timestampSource = BPTimestampSource::DEVICE;
     result.measurement.movementCount = parseDigits(buffer, 52, 1);
     result.measurement.quality = result.measurement.movementCount > 0

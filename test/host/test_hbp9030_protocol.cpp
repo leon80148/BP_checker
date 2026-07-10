@@ -206,6 +206,19 @@ static void testUnsupportedHbpFormats() {
   }
 }
 
+static void testStringAllocationFailuresFailClosed() {
+  // Parser construction does not call reserve/concat. The four checked
+  // allocation sites are ID reserve/concat and timestamp reserve/concat.
+  for (int failAt = 0; failAt < 4; ++failAt) {
+    __stringAllocationFailureCountdown() = failAt;
+    BPParseResult result = parseText(kValid);
+    CHECK_TRUE(!result.ok(), "String allocation failure rejects frame");
+    CHECK_TRUE(!result.measurement.valid,
+               "allocation failure cannot create valid measurement");
+  }
+  __stringAllocationFailureCountdown() = -1;
+}
+
 int main() {
   testCanonicalFrame();
   testCalendarAndId();
@@ -214,5 +227,6 @@ int main() {
   testMonitorErrorAndMovement();
   testUnsupportedModels();
   testUnsupportedHbpFormats();
+  testStringAllocationFailuresFailClosed();
   return testReport();
 }

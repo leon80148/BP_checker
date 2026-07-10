@@ -15,6 +15,24 @@
 #include <ctime>
 #include <string>
 
+// ---- 可注入的 String allocation failure ----
+// -1 表示正常；0 表示下一個 reserve/concat 失敗；正數會在每次配置操作遞減。
+// 只模擬 production 會檢查回傳值的操作，讓低記憶體 fail-closed 路徑可測。
+inline int& __stringAllocationFailureCountdown() {
+  static int v = -1;
+  return v;
+}
+inline bool __stringAllocationAllowed() {
+  int& countdown = __stringAllocationFailureCountdown();
+  if (countdown < 0) return true;
+  if (countdown == 0) {
+    countdown = -1;
+    return false;
+  }
+  countdown--;
+  return true;
+}
+
 // ---- fake clock：millis()/delay() 不真的睡，測試可用 delay() 快轉 ----
 inline unsigned long& __millisCounter() {
   static unsigned long v = 0;
@@ -60,9 +78,14 @@ public:
   bool isEmpty() const { return _s.empty(); }
   const char* c_str() const { return _s.c_str(); }
 
-  void reserve(unsigned int n) { _s.reserve(n); }
+  bool reserve(unsigned int n) {
+    if (!__stringAllocationAllowed()) return false;
+    _s.reserve(n);
+    return _s.capacity() >= n;
+  }
 
   bool concat(const char* p, unsigned int len) {
+    if (!__stringAllocationAllowed()) return false;
     _s.append(p, len);
     return true;
   }
