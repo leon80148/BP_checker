@@ -38,8 +38,15 @@ inline unsigned long& __millisCounter() {
   static unsigned long v = 0;
   return v;
 }
+inline unsigned long& __delayCallCount() {
+  static unsigned long v = 0;
+  return v;
+}
 inline unsigned long millis() { return __millisCounter(); }
-inline void delay(unsigned long ms) { __millisCounter() += ms; }
+inline void delay(unsigned long ms) {
+  __delayCallCount()++;
+  __millisCounter() += ms;
+}
 
 // ---- 可控 getLocalTime（ESP32 core 函式）----
 inline bool& __fakeTimeValid() {
@@ -50,21 +57,39 @@ inline struct tm& __fakeTm() {
   static struct tm t = {};
   return t;
 }
+inline unsigned long& __getLocalTimeCallCount() {
+  static unsigned long v = 0;
+  return v;
+}
 inline bool getLocalTime(struct tm* info) {
+  __getLocalTimeCallCount()++;
   if (!__fakeTimeValid()) return false;
   *info = __fakeTm();
   return true;
 }
 
-// ---- Serial stub：吃掉所有輸出 ----
+// ---- Serial stub：保留輸出供隱私測試檢查 ----
+inline std::string& __serialOutput() {
+  static std::string value;
+  return value;
+}
 class HostSerial {
 public:
   void begin(unsigned long) {}
-  template <typename T>
-  void print(const T&) {}
-  template <typename T>
-  void println(const T&) {}
-  void println() {}
+  void print(char value) { __serialOutput().push_back(value); }
+  void print(const char* value) {
+    if (value) __serialOutput().append(value);
+  }
+  void print(int value) { __serialOutput().append(std::to_string(value)); }
+  void print(unsigned int value) { __serialOutput().append(std::to_string(value)); }
+  void print(long value) { __serialOutput().append(std::to_string(value)); }
+  void print(unsigned long value) { __serialOutput().append(std::to_string(value)); }
+  template <typename T> void print(const T&) {}
+  template <typename T> void println(const T& value) {
+    print(value);
+    __serialOutput().push_back('\n');
+  }
+  void println() { __serialOutput().push_back('\n'); }
 };
 inline HostSerial Serial;
 

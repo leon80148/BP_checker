@@ -191,9 +191,8 @@ private:
     css += ".status-list{list-style:none;margin:0;padding:0;display:grid;gap:8px;}";
     css += ".status-list li{display:flex;justify-content:space-between;gap:12px;padding:8px 10px;border-radius:10px;background:#f7faff;border:1px solid #e7eef9;}";
 
-    css += ".raw-data summary{cursor:pointer;font-weight:700;outline:none;}";
-    css += ".raw-data[open] summary{margin-bottom:12px;}";
-    css += ".raw-data pre,.raw-data .data-section pre{background:#0f172a;color:#dbeafe;padding:14px;border-radius:10px;overflow-x:auto;font-size:12px;}";
+    css += ".diagnostic-data summary{cursor:pointer;font-weight:700;outline:none;}";
+    css += ".diagnostic-data[open] summary{margin-bottom:12px;}";
 
     css += ".form-shell{max-width:760px;}";
     css += ".form-shell form{display:grid;gap:10px;}";
@@ -274,7 +273,7 @@ public:
     server->on("/", HTTP_GET, [this]() { this->handleMonitor(); });
     server->on("/config", HTTP_GET, [this]() { this->handleRoot(); });
     server->on("/configure", HTTP_POST, [this]() { this->handleConfigure(); });
-    // /data 回傳最新原始資料的 HTML 片段（含 <div>/<pre> 標籤），不是純文字。
+    // /data 只回傳去識別化的結構化接收診斷 HTML 片段。
     server->on("/data", HTTP_GET, [this]() {
       server->send(200, "text/html; charset=UTF-8", *lastData);
     });
@@ -295,9 +294,6 @@ public:
 
     // 管理密碼設定
     server->on("/set_pin", HTTP_POST, [this]() { this->handleSetPin(); });
-
-    // 添加原始資料顯示路由
-    server->on("/raw_data", HTTP_GET, [this]() { this->handleRawData(); });
 
     server->on("/reset", HTTP_POST, [this]() {
       if (this->csrfBlocked()) return;
@@ -657,8 +653,8 @@ private:
       html += "</section>";
     }
 
-    html += "<details class='panel raw-data'>";
-    html += "<summary>原始資料</summary>";
+    html += "<details class='panel diagnostic-data'>";
+    html += "<summary>接收診斷</summary>";
     if (*lastData == "") {
       html += "<p class='helper-text'>等待數據...</p>";
     } else {
@@ -767,7 +763,7 @@ private:
     html += "</div>";
 
     html += "<table>";
-    html += "<tr><th>測量時間</th><th>收縮壓 (mmHg)</th><th>舒張壓 (mmHg)</th><th>脈搏 (bpm)</th><th>原始數據</th></tr>";
+    html += "<tr><th>測量時間</th><th>收縮壓 (mmHg)</th><th>舒張壓 (mmHg)</th><th>脈搏 (bpm)</th></tr>";
 
     int recordCount = recordManager->getRecordCount();
     if (recordCount > 0) {
@@ -779,18 +775,10 @@ private:
         renderTableValueCell(html, record.systolic, record.valid, &WebHandler::isSystolicAbnormal);
         renderTableValueCell(html, record.diastolic, record.valid, &WebHandler::isDiastolicAbnormal);
         renderTableValueCell(html, record.pulse, record.valid, &WebHandler::isPulseAbnormal);
-        // rawData 僅存於 RAM，重啟後從 NVS 載入的記錄沒有原始位元組；
-        // 沒資料就顯示 dash，避免使用者點進去看到空白頁
-        if (record.rawData.length() > 0) {
-          html += "<td><a href='/raw_data?id=";
-          html += i;
-          html += "' class='text-link'>查看原始數據</a></td></tr>";
-        } else {
-          html += "<td class='value-na'>—</td></tr>";
-        }
+        html += "</tr>";
       }
     } else {
-      html += "<tr><td colspan='5'>尚無歷史記錄</td></tr>";
+      html += "<tr><td colspan='4'>尚無歷史記錄</td></tr>";
     }
 
     html += "</table>";
@@ -904,7 +892,7 @@ private:
     if (csrfBlocked()) return;
     if (pinBlocked()) return;
     recordManager->clearRecords();
-    *lastData = ""; // 同步清掉殘留 raw HTML，避免 dashboard 顯示陳舊資料
+    *lastData = ""; // 同步清掉舊診斷，避免 dashboard 顯示陳舊狀態
 
     String html = buildPageStart("記錄已清除", "/history", false, "<meta http-equiv='refresh' content='2;url=/history'>");
     html += "<section class='panel danger-zone'>";
@@ -916,32 +904,6 @@ private:
     server->send(200, "text/html; charset=UTF-8", html);
   }
 
-  void handleRawData() {
-    // 嚴格解析：toInt() 會把 "abc" 變 0 而誤中 record 0
-    int idx = parseIndexParam(server->arg("id"));
-    if (idx >= 0) {
-      const BPData& record = recordManager->getRecord(idx);
-      // 與 handleHistory 的連結條件（rawData.length()>0）一致：
-      // invalid 但有原始資料的記錄也要能查看，否則 history 會出現死連結
-      if (record.rawData.length() > 0) {
-        String html = buildPageStart("原始數據", "/history");
-        html += "<section class='panel raw-data'>";
-        html += "<div class='section-head'>";
-        html += "<h2>量測原始資料</h2>";
-        html += "<a href='/history' class='btn btn-ghost'>返回歷史記錄</a>";
-        html += "</div>";
-        html += record.rawData;
-        html += "</section>";
-        html += buildPageEnd();
-
-        server->send(200, "text/html; charset=UTF-8", html);
-      } else {
-        server->send(404, "text/plain; charset=UTF-8", "找不到該記錄");
-      }
-    } else {
-      server->send(400, "text/plain; charset=UTF-8", "缺少記錄ID");
-    }
-  }
 };
 
 #endif

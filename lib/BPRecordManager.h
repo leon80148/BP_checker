@@ -106,7 +106,6 @@ public:
   }
 
   // by-value 收參數讓 caller 可決定 copy（lvalue）或 move（std::move(rvalue)）。
-  // 呼叫端用 std::move 時可省下一次 ~700B 的 rawData String 複製。
   void addRecord(BPData record) {
     int slot = _historyIndex;
     _records[slot] = std::move(record);
@@ -116,8 +115,7 @@ public:
   }
 
   // 獲取某個指定位置的記錄（0 = 最新）
-  // 回傳 const ref：BPData 含 String 欄位（rawData 可達 ~700B），by-value 多次呼叫
-  // 累積複製成本可觀。out-of-range 回傳一個靜態 default 實例。
+  // 回傳 const ref 避免複製 timestamp String；out-of-range 回傳 default 實例。
   const BPData& getRecord(int index) const {
     if (index < 0 || index >= _recordCount) {
       static const BPData kEmpty;

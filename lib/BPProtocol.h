@@ -20,6 +20,7 @@ enum class BPMeasurementQuality : uint8_t {
 enum class BPParseError : uint8_t {
   NONE = 0,
   MALFORMED,
+  INVALID_TIMESTAMP,
   DEVICE_ERROR,
   OUT_OF_RANGE,
   UNSUPPORTED_FORMAT,
@@ -34,7 +35,6 @@ struct BPData {
   int pulse = -1;
   int movementCount = 0;
   BPMeasurementQuality quality = BPMeasurementQuality::CLEAN;
-  String rawData;
   bool valid = false;
 };
 
@@ -48,5 +48,18 @@ struct BPParseResult {
     return error == BPParseError::NONE && measurement.valid;
   }
 };
+
+inline const char* bpParseErrorCode(BPParseError error) {
+  switch (error) {
+    case BPParseError::NONE:               return "valid";
+    case BPParseError::MALFORMED:          return "malformed";
+    case BPParseError::INVALID_TIMESTAMP:  return "invalid_timestamp";
+    case BPParseError::DEVICE_ERROR:       return "device_error";
+    case BPParseError::OUT_OF_RANGE:       return "out_of_range";
+    case BPParseError::UNSUPPORTED_FORMAT: return "unsupported_format";
+    case BPParseError::UNSUPPORTED_MODEL:  return "unsupported_model";
+    default:                               return "malformed";
+  }
+}
 
 #endif

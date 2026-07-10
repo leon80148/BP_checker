@@ -4,7 +4,7 @@
 //   S1. Ring buffer：getRecord(0)=最新；超過 maxRecords 環繞覆蓋最舊；
 //       out-of-range 回傳 default（valid=false）記錄。
 //   S2. 持久化 round-trip：重啟（新實例 loadFromStorage）後筆數、順序、
-//       數值、valid 旗標不變；rawData 不持久化（重啟後為空）。
+//       數值、valid 旗標不變；BPData 不提供 raw-frame 欄位。
 //   S3. 韌性：壞 count/index 被 clamp；缺 slot 不得偽造有效量測；
 //       maxRecords=1 正常運作。
 //   S4. Legacy 遷移：rec_0=最新 的舊格式 load 後順序不變並回寫為 v2；
@@ -25,7 +25,6 @@ static BPData makeRecord(const char* ts, int sys, int dia, int pul, bool valid) 
   d.diastolic = dia;
   d.pulse = pul;
   d.valid = valid;
-  d.rawData = "<pre>raw</pre>";
   return d;
 }
 
@@ -73,7 +72,6 @@ static void testPersistenceRoundTrip() {
   CHECK_EQ(m2.getRecord(0).systolic, -1, "sentinel -1 survives reload");
   CHECK_EQ(m2.getRecord(1).systolic, 120, "values survive reload");
   CHECK_TRUE(m2.getRecord(1).valid, "valid flag survives reload");
-  CHECK_EQ((long)m2.getRecord(0).rawData.length(), 0L, "rawData not persisted");
 
   // 環繞後 reload 順序仍正確
   {

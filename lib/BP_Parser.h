@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "BPProtocol.h"
+#include "ProtocolFramer.h"
 
 class BP_Parser {
 public:
@@ -19,7 +20,14 @@ public:
   }
 
   bool isLineDelimited() const {
-    return _model == "OMRON-HBP9030";
+    return framingContract().mode == ProtocolFrameMode::LINE_CRLF;
+  }
+
+  ProtocolFrameContract framingContract() const {
+    if (_model == "OMRON-HBP9030") {
+      return ProtocolFrameContract::lineCrlf(kPayloadLength);
+    }
+    return ProtocolFrameContract::unsupported();
   }
 
   BPParseResult parseResult(const uint8_t* buffer, int length) const {
@@ -127,7 +135,10 @@ private:
     const int day = parseDigits(buffer, 8, 2);
     const int hour = parseDigits(buffer, 11, 2);
     const int minute = parseDigits(buffer, 14, 2);
-    if (!validCalendar(year, month, day, hour, minute)) return result;
+    if (!validCalendar(year, month, day, hour, minute)) {
+      result.error = BPParseError::INVALID_TIMESTAMP;
+      return result;
+    }
 
     if (!result.transientSubjectId.reserve(20) ||
         !result.transientSubjectId.concat(

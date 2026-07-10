@@ -3,6 +3,8 @@
 
 #include <cstring>
 #include <deque>
+#include <type_traits>
+#include <utility>
 
 #include "lib/DataProcessor.h"
 #include "test_support.h"
@@ -19,24 +21,48 @@ public:
   int available() override { return static_cast<int>(q.size()); }
   int read() override {
     if (q.empty()) return -1;
-    int value = q.front();
+    MonitorRxEvent event = q.front();
     q.pop_front();
-    return value;
+    return event.type == MonitorRxEventType::BYTE ? event.byte : -1;
+  }
+  bool nextRxEvent(MonitorRxEvent& event) override {
+    if (q.empty()) return false;
+    event = q.front();
+    q.pop_front();
+    return true;
   }
   const char* name() const override { return "FAKE"; }
   MonitorTransportState state() const override { return st; }
   String detail() const override { return det; }
 
   void feed(const char* value) {
-    while (*value) q.push_back(static_cast<uint8_t>(*value++));
+    while (*value) feedByte(static_cast<uint8_t>(*value++));
   }
   void feedBytes(const uint8_t* data, size_t size) {
-    for (size_t i = 0; i < size; ++i) q.push_back(data[i]);
+    for (size_t i = 0; i < size; ++i) feedByte(data[i]);
   }
+  void feedDiscontinuity() {
+    lossCount++;
+    MonitorRxEvent event;
+    event.type = MonitorRxEventType::DISCONTINUITY;
+    event.epoch = lossCount;
+    q.push_back(event);
+  }
+  uint32_t dataLossCount() const override { return lossCount; }
 
-  std::deque<uint8_t> q;
+  std::deque<MonitorRxEvent> q;
+  uint32_t lossCount = 0;
   MonitorTransportState st = TRANSPORT_STATE_READY;
   String det = "ok";
+
+private:
+  void feedByte(uint8_t byte) {
+    MonitorRxEvent event;
+    event.type = MonitorRxEventType::BYTE;
+    event.byte = byte;
+    event.epoch = lossCount;
+    q.push_back(event);
+  }
 };
 
 struct World {
@@ -49,13 +75,37 @@ struct World {
 
   World() {
     Preferences::__reset();
+    __millisCounter() = 0;
+    __delayCallCount() = 0;
+    __getLocalTimeCallCount() = 0;
+    __serialOutput().clear();
     __fakeTimeValid() = false;
     proc.setup();
+    __serialOutput().clear();
   }
 };
 
 static bool contains(const String& value, const char* needle) {
   return strstr(value.c_str(), needle) != nullptr;
+}
+
+static bool contains(const std::string& value, const char* needle) {
+  return value.find(needle) != std::string::npos;
+}
+
+template <typename T, typename = void>
+struct HasRawData : std::false_type {};
+
+template <typename T>
+struct HasRawData<T, std::void_t<decltype(std::declval<T>().rawData)>>
+  : std::true_type {};
+
+template <typename T>
+static bool recordContains(const T& value, const char* needle) {
+  if constexpr (HasRawData<T>::value) {
+    return contains(value.rawData, needle);
+  }
+  return false;
 }
 
 static void feedLine(FakeTransport& transport, const char* payload) {
@@ -122,8 +172,10 @@ static void testInvalidErrorAndMotionPolicy() {
   invalid.transport.feed("hello garbage\n");
   invalid.proc.processIncomingData();
   CHECK_EQ(invalid.records.getRecordCount(), 0, "invalid frame not persisted");
-  CHECK_TRUE(contains(invalid.lastData, "68 65 6c 6c 6f"),
-             "invalid diagnostic retained in RAM");
+  CHECK_TRUE(contains(invalid.lastData, "malformed"),
+             "invalid frame exposes stable sanitized reason");
+  CHECK_TRUE(!contains(invalid.lastData, "hello"),
+             "invalid diagnostic never echoes input");
 
   World monitorError;
   feedLine(monitorError.transport,
@@ -152,24 +204,16 @@ static void testOverflowDroppedThenRecovers() {
   world.transport.feed(oversized.c_str());
   world.proc.processIncomingData();
   CHECK_EQ(world.records.getRecordCount(), 0, "overflow frame not persisted");
-  CHECK_TRUE(contains(world.lastData, "截斷"), "overflow diagnostic retained");
+  CHECK_TRUE(contains(world.lastData, "overflow"),
+             "overflow exposes stable sanitized reason");
 
   feedLine(world.transport, kFrame120);
   world.proc.processIncomingData();
   CHECK_EQ(world.records.getRecordCount(), 1, "clean frame after overflow accepted");
 }
 
-static void testRawEscapingAndCurrentClockCompatibility() {
+static void testDeviceTimeIsAuthoritativeAndNonblocking() {
   World world;
-  feedLine(world.transport,
-           "2026,07,11,09,05,<b>12345678901234567,0,120,080,072,0");
-  world.proc.processIncomingData();
-  CHECK_TRUE(contains(world.lastData, "&lt;b&gt;"), "diagnostic HTML escaped");
-  CHECK_TRUE(!contains(world.lastData, "<b>"), "raw tag absent from HTML");
-  CHECK_EQ(world.records.getRecordCount(), 1, "escaped strict frame parses");
-  CHECK_TRUE(contains(world.records.getLatestRecord().timestamp, "時間未同步"),
-             "Task 4 clock override remains explicit");
-
   __fakeTimeValid() = true;
   __fakeTm().tm_year = 126;
   __fakeTm().tm_mon = 6;
@@ -177,10 +221,145 @@ static void testRawEscapingAndCurrentClockCompatibility() {
   __fakeTm().tm_hour = 10;
   __fakeTm().tm_min = 30;
   __fakeTm().tm_sec = 0;
+  unsigned long before = millis();
+  feedLine(world.transport, kFrame120);
+  world.proc.processIncomingData();
+  CHECK_EQ(world.records.getRecordCount(), 1, "valid device frame persists");
+  CHECK_STR(world.records.getLatestRecord().timestamp, "2026-07-11 09:05:00",
+            "device timestamp wins over system/NTP time");
+  CHECK_EQ(static_cast<int>(world.records.getLatestRecord().timestampSource),
+           static_cast<int>(BPTimestampSource::DEVICE),
+           "persisted timestamp source is device");
+  CHECK_EQ(__getLocalTimeCallCount(), 0UL,
+           "measurement path never calls system clock");
+  CHECK_EQ(__delayCallCount(), 0UL, "measurement path never calls delay");
+  CHECK_EQ(millis(), before, "measurement processing does not advance fake clock");
+}
+
+static void testIdentityNeverReachesDiagnosticsOrRecord() {
+  static const char* kLeakMarker = "LEAK-MARKER-12345678";
+  static const char* kLeakMarkerHex = "4c 45 41 4b 2d 4d";
+  World world;
+  String payload("2026,07,11,09,05,");
+  payload += kLeakMarker;
+  payload += ",0,120,080,072,0";
+  feedLine(world.transport, payload.c_str());
+  world.proc.processIncomingData();
+
+  CHECK_EQ(world.records.getRecordCount(), 1, "privacy probe remains valid");
+  CHECK_TRUE(!contains(world.lastData, kLeakMarker),
+             "subject ID absent from web diagnostic");
+  CHECK_TRUE(!contains(world.lastData, kLeakMarkerHex),
+             "subject ID hex absent from web diagnostic");
+  CHECK_TRUE(!contains(__serialOutput(), kLeakMarker),
+             "subject ID absent from production Serial output");
+  CHECK_TRUE(!recordContains(world.records.getLatestRecord(), kLeakMarker),
+             "subject ID absent from in-memory record");
+  CHECK_TRUE(!recordContains(world.records.getLatestRecord(), kLeakMarkerHex),
+             "subject ID hex absent from in-memory record");
+  CHECK_TRUE(!HasRawData<BPData>::value,
+             "persistable BPData has no raw-frame field");
+}
+
+static void testInvalidDeviceTimeIsNotRepaired() {
+  World world;
+  __fakeTimeValid() = true;
+  __fakeTm().tm_year = 126;
+  __fakeTm().tm_mon = 6;
+  __fakeTm().tm_mday = 11;
+  world.transport.feed(
+    "2025,02,29,09,05,12345678901234567890,0,120,080,072,0\r\n");
+  world.proc.processIncomingData();
+  CHECK_EQ(world.records.getRecordCount(), 0,
+           "invalid device date is never repaired with system time");
+  CHECK_EQ(__getLocalTimeCallCount(), 0UL,
+           "invalid device date does not consult system clock");
+  CHECK_TRUE(contains(world.lastData, "invalid_timestamp"),
+             "invalid device date has stable sanitized reason");
+}
+
+static void testStrictCrlfAndNoIdleCompletion() {
+  World split;
+  const size_t splitAt = 27;
+  split.transport.feedBytes(reinterpret_cast<const uint8_t*>(kFrame120), splitAt);
+  split.proc.processIncomingData();
+  delay(5001);
+  split.proc.processIncomingData();
+  CHECK_EQ(split.records.getRecordCount(), 0,
+           "half line remains pending after five seconds");
+  split.transport.feedBytes(reinterpret_cast<const uint8_t*>(kFrame120 + splitAt),
+                            strlen(kFrame120) - splitAt);
+  split.transport.feed("\r\n");
+  split.proc.processIncomingData();
+  CHECK_EQ(split.records.getRecordCount(), 1,
+           "pending half completes only at CRLF");
+
+  World lfOnly;
+  lfOnly.transport.feed(kFrame120);
+  lfOnly.transport.feed("\n");
+  lfOnly.proc.processIncomingData();
+  CHECK_EQ(lfOnly.records.getRecordCount(), 0, "LF-only line rejected");
+  feedLine(lfOnly.transport, kFrame120);
+  lfOnly.proc.processIncomingData();
+  CHECK_EQ(lfOnly.records.getRecordCount(), 1,
+           "clean CRLF line after LF-only input accepted");
+
+  World crOnly;
+  crOnly.transport.feed(kFrame120);
+  crOnly.transport.feed("\r");
+  crOnly.proc.processIncomingData();
+  delay(5001);
+  crOnly.proc.processIncomingData();
+  CHECK_EQ(crOnly.records.getRecordCount(), 0, "CR-only line never completes");
+}
+
+static void testOrderedTransportLossRecovery() {
+  World world;
+  const size_t splitAt = 24;
+  world.transport.feedBytes(reinterpret_cast<const uint8_t*>(kFrame120), splitAt);
+  world.proc.processIncomingData();
+  CHECK_EQ(world.records.getRecordCount(), 0, "pre-loss partial remains pending");
+
+  world.transport.feedDiscontinuity();
+  world.transport.feedBytes(reinterpret_cast<const uint8_t*>(kFrame120 + splitAt),
+                            strlen(kFrame120) - splitAt);
+  world.transport.feed("\r\n");
+  world.proc.processIncomingData();
+  CHECK_EQ(world.records.getRecordCount(), 0,
+           "bytes spanning loss are discarded through CRLF");
+  CHECK_TRUE(contains(world.lastData, "discontinuity"),
+             "loss exposes stable sanitized diagnostic");
+  CHECK_EQ(world.transport.dataLossCount(), 1U,
+           "data-loss counter is monotonic and explicit");
+
   feedLine(world.transport, kFrame130);
   world.proc.processIncomingData();
-  CHECK_STR(world.records.getLatestRecord().timestamp, "2026-07-02 10:30:00",
-            "Task 4 will replace system clock compatibility");
+  CHECK_EQ(world.records.getRecordCount(), 1,
+           "first clean frame after loss is accepted");
+  CHECK_EQ(world.records.getLatestRecord().systolic, 130,
+           "post-loss frame is not contaminated by old bytes");
+}
+
+static void testModelSwitchClearsPartialFrame() {
+  World world;
+  const size_t splitAt = 19;
+  world.transport.feedBytes(reinterpret_cast<const uint8_t*>(kFrame120), splitAt);
+  world.proc.processIncomingData();
+
+  world.parser.setModel(String("CUSTOM"));
+  world.proc.processIncomingData();
+  world.parser.setModel(String("OMRON-HBP9030"));
+  world.transport.feedBytes(reinterpret_cast<const uint8_t*>(kFrame120 + splitAt),
+                            strlen(kFrame120) - splitAt);
+  world.transport.feed("\r\n");
+  world.proc.processIncomingData();
+  CHECK_EQ(world.records.getRecordCount(), 0,
+           "old suffix cannot cross a model switch");
+
+  feedLine(world.transport, kFrame120);
+  world.proc.processIncomingData();
+  CHECK_EQ(world.records.getRecordCount(), 1,
+           "clean frame after model switch is accepted");
 }
 
 static void testTransportStatusSync() {
@@ -201,7 +380,12 @@ int main() {
   testUnsupportedModelsNeverPersist();
   testInvalidErrorAndMotionPolicy();
   testOverflowDroppedThenRecovers();
-  testRawEscapingAndCurrentClockCompatibility();
+  testDeviceTimeIsAuthoritativeAndNonblocking();
+  testIdentityNeverReachesDiagnosticsOrRecord();
+  testInvalidDeviceTimeIsNotRepaired();
+  testStrictCrlfAndNoIdleCompletion();
+  testOrderedTransportLossRecovery();
+  testModelSwitchClearsPartialFrame();
   testTransportStatusSync();
   return testReport();
 }

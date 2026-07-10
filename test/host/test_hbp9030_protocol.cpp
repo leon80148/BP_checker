@@ -63,8 +63,6 @@ static void testCanonicalFrame() {
   CHECK_STR(result.measurement.timestamp, "2026-07-11 09:05:00",
             "device timestamp retained");
   CHECK_STR(result.transientSubjectId, kId, "subject ID returned separately");
-  CHECK_EQ(static_cast<int>(result.measurement.rawData.length()), 0,
-           "persistable measurement has no raw identity");
 }
 
 static void testCalendarAndId() {
@@ -76,13 +74,13 @@ static void testCalendarAndId() {
             "blank padded ID stays transient");
 
   expectError("2025,02,29,09,05,12345678901234567890,0,120,080,072,0",
-              BPParseError::MALFORMED, "non-leap February 29 rejected");
+              BPParseError::INVALID_TIMESTAMP, "non-leap February 29 rejected");
   expectError("2026,13,11,09,05,12345678901234567890,0,120,080,072,0",
-              BPParseError::MALFORMED, "month 13 rejected");
+              BPParseError::INVALID_TIMESTAMP, "month 13 rejected");
   expectError("2026,07,11,24,05,12345678901234567890,0,120,080,072,0",
-              BPParseError::MALFORMED, "hour 24 rejected");
+              BPParseError::INVALID_TIMESTAMP, "hour 24 rejected");
   expectError("2026,07,11,09,60,12345678901234567890,0,120,080,072,0",
-              BPParseError::MALFORMED, "minute 60 rejected");
+              BPParseError::INVALID_TIMESTAMP, "minute 60 rejected");
   expectError("2026,07,11,09,05,1234567890123456789,0,120,080,072,0",
               BPParseError::MALFORMED, "short ID rejected");
   expectError("2026,07,11,09,05,123456789012345678901,0,120,080,072,0",
