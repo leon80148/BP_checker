@@ -16,7 +16,7 @@ do
   grep -Fq -- "$token" "$FILE" || { echo "missing token: $token"; exit 1; }
 done
 
-for forbidden in "rawData" "/raw_data" "查看原始數據" "量測原始資料"; do
+for forbidden in "rawData" "transientSubjectId" "/raw_data" "查看原始數據" "量測原始資料"; do
   if grep -Fq -- "$forbidden" "$FILE"; then
     echo "forbidden identity-bearing diagnostic sink: $forbidden"
     exit 1

@@ -73,6 +73,10 @@ inline std::string& __serialOutput() {
   static std::string value;
   return value;
 }
+inline unsigned long& __sensitiveByteClearCount() {
+  static unsigned long value = 0;
+  return value;
+}
 class HostSerial {
 public:
   void begin(unsigned long) {}
@@ -116,6 +120,16 @@ public:
   }
 
   char charAt(unsigned int i) const { return i < _s.size() ? _s[i] : '\0'; }
+
+  void setCharAt(unsigned int i, char value) {
+    if (i >= _s.size()) return;
+    _s[i] = value;
+    if (value == '\0') __sensitiveByteClearCount()++;
+  }
+
+  void remove(unsigned int index) {
+    if (index < _s.size()) _s.erase(index);
+  }
 
   String substring(unsigned int from) const {
     return substring(from, (unsigned int)_s.size());

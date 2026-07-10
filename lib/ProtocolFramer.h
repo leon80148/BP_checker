@@ -107,7 +107,7 @@ private:
   ProtocolFrameEvent feedLine(
       uint8_t byte, const ProtocolFrameContract& contract) {
     if (contract.maximumPayloadLength == 0 ||
-        contract.maximumPayloadLength + 1 > kCapacity) {
+        contract.maximumPayloadLength >= kCapacity) {
       reset();
       return ProtocolFrameEvent::UNSUPPORTED;
     }
@@ -169,6 +169,9 @@ private:
       if (byte == contract.syncWord[0]) {
         _buffer[0] = byte;
         _length = 1;
+        if (_length == contract.fixedFrameLength) {
+          return validateFixedCandidate(contract);
+        }
       }
       return ProtocolFrameEvent::NONE;
     }
@@ -177,6 +180,8 @@ private:
     if (_length <= contract.syncWordLength) {
       if (memcmp(_buffer, contract.syncWord, _length) != 0) {
         retainFixedCandidate(contract, 1);
+      } else if (_length == contract.fixedFrameLength) {
+        return validateFixedCandidate(contract);
       }
       return ProtocolFrameEvent::NONE;
     }
@@ -185,14 +190,7 @@ private:
       return ProtocolFrameEvent::NONE;
     }
 
-    if (contract.validator(_buffer, _length)) {
-      _completedLength = _length;
-      _length = 0;
-      return ProtocolFrameEvent::FRAME;
-    }
-
-    retainFixedCandidate(contract, 1);
-    return ProtocolFrameEvent::REJECTED;
+    return validateFixedCandidate(contract);
   }
 
   void wipe() { memset(_buffer, 0, sizeof(_buffer)); }
@@ -231,6 +229,17 @@ private:
     }
     wipe();
     _length = 0;
+  }
+
+  ProtocolFrameEvent validateFixedCandidate(
+      const ProtocolFrameContract& contract) {
+    if (contract.validator(_buffer, _length)) {
+      _completedLength = _length;
+      _length = 0;
+      return ProtocolFrameEvent::FRAME;
+    }
+    retainFixedCandidate(contract, 1);
+    return ProtocolFrameEvent::REJECTED;
   }
 };
 

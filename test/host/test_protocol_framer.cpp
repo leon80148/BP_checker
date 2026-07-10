@@ -107,9 +107,35 @@ static void testVerifiedResynchronization() {
   CHECK_EQ(collector.frames[0][2], valid[2], "resynchronized frame is clean");
 }
 
+static bool syncOnlyValidator(const uint8_t* data, size_t length) {
+  return length == sizeof(kSync) && data[0] == kSync[0] && data[1] == kSync[1];
+}
+
+static void testContractBounds() {
+  ProtocolFramer line;
+  ProtocolFrameContract impossible = ProtocolFrameContract::lineCrlf(SIZE_MAX);
+  CHECK_EQ(static_cast<int>(line.feed('x', impossible)),
+           static_cast<int>(ProtocolFrameEvent::UNSUPPORTED),
+           "SIZE_MAX line contract fails closed before arithmetic overflow");
+  CHECK_TRUE(!line.pending(), "invalid line contract retains no byte");
+
+  ProtocolFramer fixed;
+  ProtocolFrameContract syncOnly = ProtocolFrameContract::fixedLengthVerified(
+    sizeof(kSync), kSync, sizeof(kSync), syncOnlyValidator);
+  CHECK_EQ(static_cast<int>(fixed.feed(kSync[0], syncOnly)),
+           static_cast<int>(ProtocolFrameEvent::NONE),
+           "sync-only fixed frame waits for complete sync");
+  CHECK_EQ(static_cast<int>(fixed.feed(kSync[1], syncOnly)),
+           static_cast<int>(ProtocolFrameEvent::FRAME),
+           "sync length equal to frame length completes without extra write");
+  CHECK_EQ(fixed.frameLength(), sizeof(kSync),
+           "sync-only fixed frame reports exact length");
+}
+
 int main() {
   testBurstAndFragmentation();
   testCompletePlusPartialAndEmbeddedLf();
   testVerifiedResynchronization();
+  testContractBounds();
   return testReport();
 }

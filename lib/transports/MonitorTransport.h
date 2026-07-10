@@ -16,6 +16,7 @@ enum MonitorTransportState {
 enum class MonitorRxEventType : uint8_t {
   BYTE = 0,
   DISCONTINUITY,
+  STREAM_RESET,
 };
 
 // POD event boundary shared by transports and the main-loop frame owner.

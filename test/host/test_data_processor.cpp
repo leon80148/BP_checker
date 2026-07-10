@@ -6,6 +6,7 @@
 #include <type_traits>
 #include <utility>
 
+#include "lib/CsvExport.h"
 #include "lib/DataProcessor.h"
 #include "test_support.h"
 
@@ -45,6 +46,13 @@ public:
     lossCount++;
     MonitorRxEvent event;
     event.type = MonitorRxEventType::DISCONTINUITY;
+    event.epoch = lossCount;
+    q.push_back(event);
+  }
+  void feedStreamReset() {
+    lossCount++;
+    MonitorRxEvent event;
+    event.type = MonitorRxEventType::STREAM_RESET;
     event.epoch = lossCount;
     q.push_back(event);
   }
@@ -91,6 +99,33 @@ static bool contains(const String& value, const char* needle) {
 
 static bool contains(const std::string& value, const char* needle) {
   return value.find(needle) != std::string::npos;
+}
+
+static void expectNoEncodedIdentity(const String& value, const char* label) {
+  const char* representations[] = {
+    "LEAK-MARKER-12345678",
+    "4c 45 41 4b 2d 4d",
+    "4C 45 41 4B 2D 4D",
+    "TEVBSy1NQVJLRVItMTIzNDU2Nzg=",
+    "LEAK%2DMARKER%2D12345678",
+  };
+  for (const char* representation : representations) {
+    CHECK_TRUE(!contains(value, representation), label);
+  }
+}
+
+static void expectNoEncodedIdentity(const std::string& value,
+                                    const char* label) {
+  const char* representations[] = {
+    "LEAK-MARKER-12345678",
+    "4c 45 41 4b 2d 4d",
+    "4C 45 41 4B 2D 4D",
+    "TEVBSy1NQVJLRVItMTIzNDU2Nzg=",
+    "LEAK%2DMARKER%2D12345678",
+  };
+  for (const char* representation : representations) {
+    CHECK_TRUE(!contains(value, representation), label);
+  }
 }
 
 template <typename T, typename = void>
@@ -259,6 +294,32 @@ static void testIdentityNeverReachesDiagnosticsOrRecord() {
              "subject ID hex absent from in-memory record");
   CHECK_TRUE(!HasRawData<BPData>::value,
              "persistable BPData has no raw-frame field");
+
+  expectNoEncodedIdentity(world.lastData,
+                          "encoded identity absent from valid diagnostic");
+  expectNoEncodedIdentity(__serialOutput(),
+                          "encoded identity absent from valid Serial output");
+  CHECK_TRUE(!Preferences::__containsSubstring(kLeakMarker),
+             "subject ID absent from every fake NVS value");
+
+  String csv;
+  appendHistoryCsv(csv, world.records);
+  expectNoEncodedIdentity(csv, "encoded identity absent from CSV");
+
+  World error;
+  String errorPayload("2026,07,11,09,05,");
+  errorPayload += kLeakMarker;
+  errorPayload += ",7,   ,   ,   ,0";
+  feedLine(error.transport, errorPayload.c_str());
+  error.proc.processIncomingData();
+  CHECK_EQ(error.records.getRecordCount(), 0,
+           "identity canary error frame never persists");
+  expectNoEncodedIdentity(error.lastData,
+                          "encoded identity absent from rejected diagnostic");
+  expectNoEncodedIdentity(__serialOutput(),
+                          "encoded identity absent from rejected Serial output");
+  CHECK_TRUE(!Preferences::__containsSubstring(kLeakMarker),
+             "rejected subject ID absent from fake NVS");
 }
 
 static void testInvalidDeviceTimeIsNotRepaired() {
@@ -362,6 +423,19 @@ static void testModelSwitchClearsPartialFrame() {
            "clean frame after model switch is accepted");
 }
 
+static void testCleanReconnectBoundaryKeepsFirstNewFrame() {
+  World world;
+  world.transport.feedBytes(reinterpret_cast<const uint8_t*>(kFrame120), 18);
+  world.proc.processIncomingData();
+  world.transport.feedStreamReset();
+  feedLine(world.transport, kFrame130);
+  world.proc.processIncomingData();
+  CHECK_EQ(world.records.getRecordCount(), 1,
+           "trusted reconnect boundary accepts first clean frame");
+  CHECK_EQ(world.records.getLatestRecord().systolic, 130,
+           "pre-reconnect partial cannot contaminate clean frame");
+}
+
 static void testTransportStatusSync() {
   World world;
   CHECK_TRUE(contains(world.transportStatus, "就緒"), "status label from state");
@@ -386,6 +460,7 @@ int main() {
   testStrictCrlfAndNoIdleCompletion();
   testOrderedTransportLossRecovery();
   testModelSwitchClearsPartialFrame();
+  testCleanReconnectBoundaryKeepsFirstNewFrame();
   testTransportStatusSync();
   return testReport();
 }

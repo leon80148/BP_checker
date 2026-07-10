@@ -217,6 +217,28 @@ static void testStringAllocationFailuresFailClosed() {
   __stringAllocationFailureCountdown() = -1;
 }
 
+static void testTransientIdentityIsWipedOnEveryResultPath() {
+  __sensitiveByteClearCount() = 0;
+  {
+    BPParseResult result = parseText(kValid);
+    CHECK_TRUE(result.ok(), "valid wipe probe parses");
+    CHECK_STR(result.transientSubjectId, kId, "valid wipe probe owns ID");
+  }
+  CHECK_TRUE(__sensitiveByteClearCount() >= 20,
+             "valid result destructor overwrites transient ID");
+
+  __sensitiveByteClearCount() = 0;
+  {
+    BPParseResult result = parseFrame(frame("2026,07,11,09,05", kId, "7",
+                                            "   ", "   ", "   ", "0"));
+    CHECK_EQ(static_cast<int>(result.error),
+             static_cast<int>(BPParseError::DEVICE_ERROR),
+             "error wipe probe reaches post-ID result");
+  }
+  CHECK_TRUE(__sensitiveByteClearCount() >= 20,
+             "error result destructor overwrites transient ID");
+}
+
 int main() {
   testCanonicalFrame();
   testCalendarAndId();
@@ -226,5 +248,6 @@ int main() {
   testUnsupportedModels();
   testUnsupportedHbpFormats();
   testStringAllocationFailuresFailClosed();
+  testTransientIdentityIsWipedOnEveryResultPath();
   return testReport();
 }

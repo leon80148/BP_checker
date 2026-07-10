@@ -58,6 +58,16 @@ public:
 
   static void __reset() { store().clear(); }
 
+  static bool __containsSubstring(const char* needle) {
+    if (needle == nullptr) return false;
+    for (const auto& nameSpace : store()) {
+      for (const auto& item : nameSpace.second) {
+        if (item.second.find(needle) != std::string::npos) return true;
+      }
+    }
+    return false;
+  }
+
 private:
   using KV = std::map<std::string, std::string>;
   static std::map<std::string, KV>& store() {

@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include <stdint.h>
+#include <utility>
 
 enum class BPTimestampSource : uint8_t {
   UNSYNCED = 0,
@@ -44,8 +45,38 @@ struct BPParseResult {
   BPParseError error = BPParseError::MALFORMED;
   int deviceErrorCode = 0;
 
+  BPParseResult() = default;
+  BPParseResult(const BPParseResult&) = delete;
+  BPParseResult& operator=(const BPParseResult&) = delete;
+
+  BPParseResult(BPParseResult&& other) noexcept
+    : measurement(std::move(other.measurement)),
+      transientSubjectId(std::move(other.transientSubjectId)),
+      error(other.error),
+      deviceErrorCode(other.deviceErrorCode) {}
+
+  BPParseResult& operator=(BPParseResult&& other) noexcept {
+    if (this == &other) return *this;
+    secureClearTransientId();
+    measurement = std::move(other.measurement);
+    transientSubjectId = std::move(other.transientSubjectId);
+    error = other.error;
+    deviceErrorCode = other.deviceErrorCode;
+    return *this;
+  }
+
+  ~BPParseResult() { secureClearTransientId(); }
+
   bool ok() const {
     return error == BPParseError::NONE && measurement.valid;
+  }
+
+private:
+  void secureClearTransientId() {
+    for (unsigned int i = 0; i < transientSubjectId.length(); ++i) {
+      transientSubjectId.setCharAt(i, '\0');
+    }
+    transientSubjectId.remove(0);
   }
 };
 

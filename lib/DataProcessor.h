@@ -132,7 +132,6 @@ private:
     }
 
     BPData measurement = std::move(result.measurement);
-    result.transientSubjectId = String();
     const int systolic = measurement.systolic;
     const int diastolic = measurement.diastolic;
     const int pulse = measurement.pulse;
@@ -186,10 +185,15 @@ public:
       lastTransportActivity = millis();
       transportActive = true;
 
-      if (rxEvent.type == MonitorRxEventType::DISCONTINUITY) {
+      if (rxEvent.type == MonitorRxEventType::DISCONTINUITY ||
+          rxEvent.type == MonitorRxEventType::STREAM_RESET) {
         rxEpoch = rxEvent.epoch;
         rxEpochKnown = true;
-        framer.discardUntilBoundary();
+        if (rxEvent.type == MonitorRxEventType::STREAM_RESET) {
+          framer.reset();
+        } else {
+          framer.discardUntilBoundary();
+        }
         continue;
       }
       if (rxEpochKnown && rxEvent.epoch != rxEpoch) {
