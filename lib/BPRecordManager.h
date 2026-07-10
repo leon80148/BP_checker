@@ -69,7 +69,7 @@ private:
   void saveSlot(int slot) {
     _preferences.begin(kNamespace, false);
     String recData = serializeRecord(_records[slot]);
-    char key[12];
+    char key[24];
     snprintf(key, sizeof(key), "slot_%d", slot);
     _preferences.putString(key, recData);
     _preferences.putInt("count", _recordCount);
@@ -82,7 +82,7 @@ private:
   void saveAllSlots() {
     if (_recordCount <= 0) return;
     _preferences.begin(kNamespace, false);
-    char key[12];
+    char key[24];
     for (int i = 0; i < _recordCount; i++) {
       String recData = serializeRecord(_records[i]);
       snprintf(key, sizeof(key), "slot_%d", i);
@@ -162,7 +162,7 @@ public:
       // count < max 表示 ring buffer 還沒環繞，只有 slot[0..count-1] 有資料；
       // count == max 已環繞，需讀全部 slot。
       int slotsToRead = (storedCount < _maxRecords) ? storedCount : _maxRecords;
-      char key[12];
+      char key[24];
       for (int i = 0; i < slotsToRead; i++) {
         snprintf(key, sizeof(key), "slot_%d", i);
         String recData = _preferences.getString(key, "");
@@ -172,7 +172,7 @@ public:
     } else {
       // 舊格式 rec_0=newest..rec_(count-1)=oldest；放到 _records[count-1-i]
       _recordCount = storedCount;
-      char key[12];
+      char key[24];
       for (int i = 0; i < _recordCount; i++) {
         snprintf(key, sizeof(key), "rec_%d", i);
         String recData = _preferences.getString(key, "");

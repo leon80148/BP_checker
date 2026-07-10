@@ -1,0 +1,10 @@
+default_profile: esp32s3
+profiles:
+  esp32s3:
+    notes: Reproducible BP_checker ESP32-S3 build
+    fqbn: esp32:esp32:esp32s3
+    platforms:
+      - platform: esp32:esp32 (3.3.7)
+        platform_index_url: https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+    libraries:
+      - ArduinoJson (7.4.2)

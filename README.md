@@ -95,24 +95,42 @@
 
 ## 開發
 
-### 檢查 UI 標記
+### 完整品質檢查
 
 ```bash
+bash scripts/run_quality_gate.sh
+```
+
+這個單一入口會執行 host tests、UI/static checks、`--warnings all` 韌體編譯，
+並在 `build/` 產生帶有 commit SHA 與 artifact SHA-256 的 SBOM。需要
+Arduino CLI 1.4.1 與 `jq`；ESP32 core 3.3.7 和 ArduinoJson 7.4.2 由
+`sketch.yaml` profile 固定並隔離安裝。
+
+只跑較快的檢查時可用：
+
+```bash
+bash scripts/run_host_tests.sh
 bash scripts/check_ui_markup.sh
 ```
 
 ### 編譯
 
 ```bash
-arduino-cli compile -b esp32:esp32:esp32s3 --board-options USBMode=default /path/to/BP_checker
+arduino-cli compile .
 ```
 
-主檔目前為 `bp_checker.ino`。Arduino 一般要求 sketch 主檔名稱與所在資料夾名稱一致；本專案資料夾為 `BP_checker`，跟主檔大小寫不同。Windows 上因為檔案系統不分大小寫所以可直接編譯；Linux/macOS 在編譯前可能需要把主檔改名為 `BP_checker.ino`（或把資料夾改為 `bp_checker`）。
+`BP_checker.ino` 與專案目錄大小寫一致；`sketch.yaml` 的 default profile
+讓 Linux、macOS、Windows 都使用相同 target 與 dependency 版本。等同的明確命令是：
+
+```bash
+arduino-cli compile --profile esp32s3 --board-options USBMode=default --warnings all .
+```
 
 ### 上傳
 
 ```bash
-arduino-cli compile --upload -b esp32:esp32:esp32s3 --board-options USBMode=default,UploadSpeed=115200 -p <PORT> /path/to/BP_checker
+arduino-cli compile --upload --profile esp32s3 \
+  --board-options USBMode=default,UploadSpeed=115200 -p <PORT> .
 ```
 
 ## 卡住了怎麼辦

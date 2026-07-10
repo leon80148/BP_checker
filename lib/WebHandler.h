@@ -810,17 +810,16 @@ private:
   }
 
   void handleHistoryAPI() {
-    // ArduinoJson v6：傳 String 進去會 copy 進 doc pool；改用 c_str() 直接引用，
-    // 在 single-thread handler 內 BPData 不會被修改，pointer 安全。
-    // 20 筆 × JSON_OBJECT_SIZE(5) + JSON_ARRAY_SIZE(20) ≈ 1936B，2048 足夠且省 1KB loopTask stack。
-    StaticJsonDocument<2048> doc;
-    JsonArray records = doc.createNestedArray("records");
+    // 傳 String 進去會 copy；使用 c_str() 直接引用。在 single-thread handler
+    // 內 BPData 不會被修改，pointer 安全。
+    JsonDocument doc;
+    JsonArray records = doc["records"].to<JsonArray>();
 
     int recordCount = recordManager->getRecordCount();
     for (int i = 0; i < recordCount; i++) {
       const BPData& record = recordManager->getRecord(i);
 
-      JsonObject recordObj = records.createNestedObject();
+      JsonObject recordObj = records.add<JsonObject>();
       recordObj["timestamp"] = record.timestamp.c_str();
       recordObj["systolic"] = record.systolic;
       recordObj["diastolic"] = record.diastolic;
@@ -835,7 +834,7 @@ private:
 
   // 給 dashboard JS 輪詢用的小型狀態端點，~300 bytes
   void handleLatestAPI() {
-    StaticJsonDocument<512> doc;
+    JsonDocument doc;
     int count = recordManager->getRecordCount();
     doc["count"] = count;
     if (count > 0) {

@@ -40,11 +40,10 @@ static void usbHostDaemonTask(void* arg) {
   auto* self = static_cast<UsbCdcTransport*>(arg);
   auto* impl = self->impl;
 
-  const usb_host_config_t hostConfig = {
-    .skip_phy_setup = false,
-    .root_port_unpowered = false,
-    .intr_flags = ESP_INTR_FLAG_LOWMED,
-  };
+  usb_host_config_t hostConfig = {};
+  hostConfig.skip_phy_setup = false;
+  hostConfig.root_port_unpowered = false;
+  hostConfig.intr_flags = ESP_INTR_FLAG_LOWMED;
 
   esp_err_t ret = usb_host_install(&hostConfig);
   if (ret != ESP_OK) {

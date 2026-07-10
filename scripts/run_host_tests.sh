@@ -11,7 +11,9 @@ mkdir -p "$BUILD_DIR"
 status=0
 for src in test/host/test_*.cpp; do
   name=$(basename "$src" .cpp)
-  c++ -std=c++17 -Wall -Wextra -I. -Itest/host -o "$BUILD_DIR/$name" "$src"
+  # Use -iquote for the repository root so the required VERSION file cannot
+  # shadow the standard C++ <version> header on case-insensitive filesystems.
+  c++ -std=c++17 -Wall -Wextra -iquote . -Itest/host -o "$BUILD_DIR/$name" "$src"
   echo "== $name =="
   "$BUILD_DIR/$name" || status=1
 done
