@@ -28,7 +28,7 @@ HBP-9030 factory format 5 is a CRLF-terminated CSV frame with exactly 11 fields:
 10. pulse
 11. movement count
 
-The payload is exactly 53 bytes before CRLF (55 bytes on the wire). Its comma offsets and widths are fixed: `YYYY(4),MM(2),DD(2),HH(2),mm(2),ID(20),error(1),SYS(3),DIA(3),PR(3),movement(1)`. The 20-byte ID is opaque printable ASCII excluding delimiters and is transient even when blank/padded. A zero-error measurement requires ASCII digits in every numeric field; a nonzero-error frame requires exactly three spaces in each vital field. No sign, trim, prefix conversion, embedded NUL, or trailing byte is accepted.
+The payload is exactly 53 bytes before CRLF (55 bytes on the wire). Its comma offsets and widths are fixed: `YYYY(4),MM(2),DD(2),HH(2),mm(2),ID(20),error(1),SYS(3),DIA(3),PR(3),movement(1)`. The 20-byte ID is opaque printable ASCII excluding delimiters and is transient even when blank/padded. A zero-error measurement requires ASCII digits in every numeric field. A nonzero-error frame accepts the official three-space vital fields or defensive fixed-width numeric vitals, but always returns `DEVICE_ERROR` and is never persisted; mixed/other vital syntax is malformed. No sign, trim, prefix conversion, embedded NUL, or trailing byte is accepted.
 
 Production acceptance requires a calendar-valid device time, zero error, and inclusive official measurement ranges: systolic 60-260 mmHg, diastolic 30-215 mmHg, and pulse 40-180 bpm. A nonzero error with three space-filled vital fields is a well-formed `DEVICE_ERROR`, not a malformed measurement; it is never added to history. Movement is retained as a quality warning. Parsing distinguishes `MALFORMED`, `DEVICE_ERROR`, `OUT_OF_RANGE`, and valid-with-motion.
 
