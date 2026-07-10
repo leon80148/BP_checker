@@ -26,7 +26,9 @@ grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' VERSION
 
 echo "== host tests =="
 bash test/tooling/test_build_contract.sh
+bash scripts/check_usb_callback_contract.sh
 bash scripts/run_host_tests.sh
+bash scripts/run_concurrency_stress.sh
 
 echo "== UI/static checks =="
 bash scripts/check_ui_markup.sh

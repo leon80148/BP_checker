@@ -45,7 +45,7 @@ WebHandler 各 route 讀全域 *lastData / recordManager 渲染 HTML/JSON
 
 frame 邊界由 `BP_Parser::framingContract()` 明確提供。Production 只支援 HBP-9030 format 5 `LINE_CRLF`；未驗證的 binary/CUSTOM 型號一律 fail closed。`ProtocolFramer` 的 synthetic fixed-frame 測試只驗證 header/checksum resync 狀態機，不代表支援其他血壓計。
 
-**Transport 抽象**：`lib/transports/MonitorTransport.h` 以 ordered POD `MonitorRxEvent` 將 bytes/discontinuity 交給 main-loop owner，並保留 legacy byte adapter。`kTransportMode`（`lib/BPConfig.h`）在 `setup()` 決定實作：
+**Transport 抽象**：`lib/transports/MonitorTransport.h` 以 ordered POD `MonitorRxEvent` 將 bytes/discontinuity 交給 main-loop owner，並保留 legacy byte adapter。USB callbacks 只寫入 static FreeRTOS stream buffer 與 POD queues；每個 loss/reset marker 帶已接受 byte boundary，main loop 才能依序交付。只有 `poll()` 可修改 `String` 狀態或 open/configure/close CDC handle。`kTransportMode`（`lib/BPConfig.h`）在 `setup()` 決定實作：
 - `TRANSPORT_MODE_OTG_PRIMARY`（預設）→ `UsbCdcTransport`（USB host，餵 vendored CDC-ACM driver）
 - `TRANSPORT_MODE_UART_FALLBACK` → `UartTransport`（板子專屬 RX/TX，pin 也在 BPConfig.h）
 
