@@ -9,6 +9,7 @@
 #include "lib/WiFiManager.h"         // WiFi 管理器
 #include "lib/DataProcessor.h"       // 數據處理器
 #include "lib/BPConfig.h"
+#include "lib/BuildInfo.h"
 #include "lib/transports/MonitorTransport.h"
 #include "lib/transports/UartTransport.h"
 #include "lib/transports/UsbCdcTransport.h"
@@ -49,6 +50,11 @@ void setup() {
   // 初始化串列埠監視器
   Serial.begin(115200);
   delay(1000); // 等待串列埠穩定
+  Serial.print("BP_checker firmware ");
+  Serial.print(BP_FIRMWARE_VERSION);
+  Serial.print(" (");
+  Serial.print(BP_BUILD_SHA);
+  Serial.println(")");
 
   // pinMode 提早設定，讓 reset button 在後續 WiFi 連線階段也能被偵測
   pinMode(kResetPin, INPUT_PULLUP);

@@ -25,6 +25,7 @@ grep -Fxq '      - ArduinoJson (7.4.2)' sketch.yaml
 grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' VERSION
 
 echo "== host tests =="
+bash test/tooling/test_build_contract.sh
 bash scripts/run_host_tests.sh
 
 echo "== UI/static checks =="
@@ -34,8 +35,16 @@ echo "== pinned firmware build =="
 rm -rf build/firmware
 mkdir -p build/firmware
 version=$(tr -d '\r\n' < VERSION)
+source_sha=$(git rev-parse --verify 'HEAD^{commit}')
 compile_log=build/firmware/compile.log
 grep -Fxq "#define BP_FIRMWARE_VERSION \"${version}\"" lib/BuildInfo.h
+build_properties=$(arduino-cli compile --profile esp32s3 --show-properties=expanded . 2>/dev/null)
+platform_path=$(printf '%s\n' "$build_properties" \
+  | awk -F= '$1 == "runtime.platform.path" { print $2; exit }')
+target_libs_path=$(printf '%s\n' "$build_properties" \
+  | awk -F= '$1 == "runtime.tools.esp32s3-libs-3.3.7.path" { print $2; exit }')
+[[ "$platform_path" == *esp32_esp32_3.3.7_* ]]
+[[ "$target_libs_path" == *esp32_esp32s3-libs_3.3.7_* ]]
 
 arduino-cli compile \
   --profile esp32s3 \
@@ -43,23 +52,26 @@ arduino-cli compile \
   --warnings all \
   --clean \
   --output-dir build/firmware \
+  --build-property "compiler.cpp.extra_flags=-DBP_BUILD_SHA_TOKEN=${source_sha}" \
   . 2>&1 | tee "$compile_log"
 
-if grep -F "$ROOT/" "$compile_log" | grep -F 'warning:' >/dev/null; then
-  echo "project warning detected; see $compile_log" >&2
-  exit 1
-fi
+bash scripts/check_compile_warnings.sh \
+  "$compile_log" "$platform_path/" "$target_libs_path/"
 
 artifact=build/firmware/BP_checker.ino.bin
 test -s "$artifact" || {
   echo "expected firmware artifact is missing: $artifact" >&2
   exit 1
 }
+grep -aFq "$version" "$artifact"
+grep -aFq "$source_sha" "$artifact"
 
 echo "== SBOM/build metadata =="
 bash scripts/generate_sbom.sh build/sbom.json "$artifact"
 jq -e --arg version "$version" --arg sha "$(git rev-parse HEAD)" \
-  '.firmware.version == $version and .firmware.source_sha == $sha' \
+  '.firmware.version == $version and
+   .firmware.source_sha == $sha and
+   any(.components[]; .name == "espressif/usb_host_cdc_acm")' \
   build/sbom.json >/dev/null
 if [[ "${CI:-false}" == "true" ]]; then
   jq -e '.firmware.source_dirty == false' build/sbom.json >/dev/null
