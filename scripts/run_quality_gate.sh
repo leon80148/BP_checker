@@ -61,7 +61,7 @@ if [[ -n "$release_anchor" ]]; then
     echo "BP_RELEASE_PUBLIC_KEY_DER_HEX must be even lowercase hex (max 128 DER bytes)" >&2
     exit 1
   fi
-  extra_flags+=" -DBP_RELEASE_PUBLIC_KEY_DER_HEX=\\\"${release_anchor}\\\""
+  extra_flags+=" -DBP_RELEASE_PUBLIC_KEY_DER_HEX=${release_anchor}"
 fi
 
 arduino-cli compile \
