@@ -19,6 +19,13 @@
 #include "lib/transports/UartTransport.h"
 #include "lib/transports/UsbCdcTransport.h"
 
+// Arduino-ESP32 otherwise marks a pending OTA image valid inside initArduino(),
+// before setup() can verify its receipt, running hash, storage, transport, and
+// Web security. Keep the bootloader rollback window open until those checks.
+extern "C" bool verifyRollbackLater() {
+  return true;  // Defer pending-image confirmation until setup health checks.
+}
+
 // AP模式設定
 const char* ap_ssid = "ESP32_BP_checker";
 const char* hostname = "bp_checker"; // mDNS主機名

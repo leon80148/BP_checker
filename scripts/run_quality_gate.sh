@@ -63,6 +63,18 @@ arduino-cli compile \
 bash scripts/check_compile_warnings.sh \
   "$compile_log" "$platform_path/" "$target_libs_path/"
 
+nm_tool=$(printf '%s\n' "$build_properties" \
+  | awk -F= '$1 == "compiler.path" { print $2 "xtensa-esp32s3-elf-nm"; exit }')
+test -x "$nm_tool"
+rollback_symbol=$(
+  "$nm_tool" build/firmware/BP_checker.ino.elf \
+    | awk '$3 == "verifyRollbackLater" { print $2; exit }'
+)
+if [[ "$rollback_symbol" != "T" ]]; then
+  echo "verifyRollbackLater must be a strong linked override; found: ${rollback_symbol:-missing}" >&2
+  exit 1
+fi
+
 artifact=build/firmware/BP_checker.ino.bin
 test -s "$artifact" || {
   echo "expected firmware artifact is missing: $artifact" >&2

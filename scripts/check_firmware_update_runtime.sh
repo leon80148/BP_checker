@@ -5,9 +5,20 @@ cd "$(dirname "$0")/.."
 header=lib/FirmwareUpdateRuntime.h
 source=src/FirmwareUpdateRuntime.cpp
 anchor=lib/ReleaseTrustAnchor.h
+sketch=BP_checker.ino
 
 for file in "$header" "$source" "$anchor"; do
   test -f "$file" || { echo "missing signed update runtime: $file" >&2; exit 1; }
+done
+
+for token in \
+  'extern "C" bool verifyRollbackLater()' \
+  'return true;  // Defer pending-image confirmation until setup health checks.'
+do
+  grep -Fq -- "$token" "$sketch" || {
+    echo "missing Arduino pre-setup rollback deferral: $token" >&2
+    exit 1
+  }
 done
 
 for token in \
