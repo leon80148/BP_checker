@@ -56,6 +56,13 @@ if [[ -n "$(git status --porcelain --untracked-files=normal 2>/dev/null)" ]]; th
 fi
 artifact_sha=$(sha256_file "$ARTIFACT")
 artifact_size=$(wc -c < "$ARTIFACT" | tr -d ' ')
+release_anchor=${BP_RELEASE_PUBLIC_KEY_DER_HEX:-}
+trust_anchor_configured=false
+trust_anchor_sha256=""
+if [[ -n "$release_anchor" ]]; then
+  trust_anchor_configured=true
+  trust_anchor_sha256=$(printf '%s' "$release_anchor" | sha256_stream)
+fi
 vendor_source=src/third_party/espressif_usb_host_cdc_acm
 test -d "$vendor_source" || {
   echo "vendored CDC source is missing: $vendor_source" >&2
@@ -86,6 +93,8 @@ jq -n \
   --arg version "$version" \
   --arg source_sha "$source_sha" \
   --argjson source_dirty "$source_dirty" \
+  --argjson trust_anchor_configured "$trust_anchor_configured" \
+  --arg trust_anchor_sha256 "$trust_anchor_sha256" \
   --arg profile "esp32s3" \
   --arg fqbn "esp32:esp32:esp32s3" \
   --arg platform "esp32:esp32" \
@@ -108,7 +117,9 @@ jq -n \
     firmware: {
       version: $version,
       source_sha: $source_sha,
-      source_dirty: $source_dirty
+      source_dirty: $source_dirty,
+      trust_anchor_configured: $trust_anchor_configured,
+      trust_anchor_sha256: $trust_anchor_sha256
     },
     build: {
       profile: $profile,
@@ -140,6 +151,10 @@ jq -e '
   .schema == "bp-checker-sbom-v1" and
   .firmware.version != "" and
   (.firmware.source_sha | test("^[0-9a-f]{40}$")) and
+  ((.firmware.trust_anchor_configured == false and
+    .firmware.trust_anchor_sha256 == "") or
+   (.firmware.trust_anchor_configured == true and
+    (.firmware.trust_anchor_sha256 | length) == 64)) and
   .build.compiler != "unknown" and
   .components[0].version == "3.3.7" and
   .components[1].version == "7.4.2" and

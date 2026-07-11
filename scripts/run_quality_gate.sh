@@ -30,6 +30,7 @@ bash scripts/check_usb_callback_contract.sh
 bash scripts/check_bounded_web_runtime.sh
 bash scripts/check_security_runtime_integration.sh
 bash scripts/check_firmware_update_runtime.sh
+bash test/tooling/test_release_contract.sh
 bash scripts/run_host_tests.sh
 bash scripts/run_concurrency_stress.sh
 
@@ -51,13 +52,25 @@ target_libs_path=$(printf '%s\n' "$build_properties" \
 [[ "$platform_path" == *esp32_esp32_3.3.7_* ]]
 [[ "$target_libs_path" == *esp32_esp32s3-libs_3.3.7_* ]]
 
+extra_flags="-DBP_BUILD_SHA_TOKEN=${source_sha}"
+release_anchor=${BP_RELEASE_PUBLIC_KEY_DER_HEX:-}
+if [[ -n "$release_anchor" ]]; then
+  if [[ ! "$release_anchor" =~ ^[0-9a-f]+$ ||
+        $(( ${#release_anchor} % 2 )) -ne 0 ||
+        ${#release_anchor} -gt 256 ]]; then
+    echo "BP_RELEASE_PUBLIC_KEY_DER_HEX must be even lowercase hex (max 128 DER bytes)" >&2
+    exit 1
+  fi
+  extra_flags+=" -DBP_RELEASE_PUBLIC_KEY_DER_HEX=\\\"${release_anchor}\\\""
+fi
+
 arduino-cli compile \
   --profile esp32s3 \
   --board-options USBMode=default \
   --warnings all \
   --clean \
   --output-dir build/firmware \
-  --build-property "compiler.cpp.extra_flags=-DBP_BUILD_SHA_TOKEN=${source_sha}" \
+  --build-property "compiler.cpp.extra_flags=${extra_flags}" \
   . 2>&1 | tee "$compile_log"
 
 bash scripts/check_compile_warnings.sh \

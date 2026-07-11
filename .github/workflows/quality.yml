@@ -26,6 +26,13 @@ jobs:
       - name: Run the local quality gate
         run: bash scripts/run_quality_gate.sh
 
+      - name: Package unsigned release candidate
+        env:
+          BP_RELEASE_SEQUENCE: ${{ github.run_number }}
+          BP_RELEASE_MINIMUM_SEQUENCE: "0"
+          BP_RELEASE_PUBLIC_KEY_DER_HEX: ${{ vars.BP_RELEASE_PUBLIC_KEY_DER_HEX }}
+        run: bash scripts/package_release.sh --candidate
+
       - name: Upload traceable build evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -35,3 +42,4 @@ jobs:
             build/firmware/*.bin
             build/firmware/compile.log
             build/sbom.json
+            build/release/**
