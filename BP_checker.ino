@@ -45,6 +45,7 @@ bool fillDeviceEntropy(void*, uint8_t* output, size_t length) {
 
 DeviceEntropySource deviceEntropy = {nullptr, fillDeviceEntropy};
 DeviceSecurity deviceSecurity(&preferences, deviceEntropy);
+MeasurementPolicyStore measurementPolicyStore(&preferences);
 bp_web::AuthFailureLimiter authFailureLimiter;
 bp_web::WebRequestGate webRequestGate(&authFailureLimiter);
 
@@ -52,7 +53,8 @@ bp_web::WebRequestGate webRequestGate(&authFailureLimiter);
 BP_Parser bpParser("OMRON-HBP9030");
 
 // 建立血壓記錄管理器
-BP_RecordManager recordManager(20); // 保存最近20筆記錄
+MonotonicMillis64 uptimeClock;
+BP_RecordManager recordManager(20, &uptimeClock); // 保存最近20筆記錄
 
 // 建立模組化管理器
 WebHandler* webHandler;
@@ -161,6 +163,7 @@ void loadHistoryFromStorage() {
 void setup() {
   // 初始化串列埠監視器
   Serial.begin(115200);
+  uptimeClock.observe(static_cast<uint32_t>(millis()));
   Serial.print("BP_checker firmware ");
   Serial.print(BP_FIRMWARE_VERSION);
   Serial.print(" (");
@@ -205,6 +208,11 @@ void setup() {
     }
   }
 
+  if (measurementPolicyStore.loadOrCreate() != MeasurementPolicyResult::OK) {
+    Serial.println("measurement_policy_load_failed");
+    return;
+  }
+
   // 初始化各個模組。先建立 transport，讓 Web operations state 直接讀取
   // main-loop 擁有的累計計數，不另複製或重設診斷狀態。
   if (kTransportMode == TRANSPORT_MODE_OTG_PRIMARY) {
@@ -219,6 +227,8 @@ void setup() {
                               &bpParser,
                               &bp_model, &lastData, &transportName,
                               &transportStatus, monitorTransport,
+                              &uptimeClock,
+                              &measurementPolicyStore,
                               hostname, ap_ssid);
 
   wifiManager = new WiFiManager(
@@ -279,6 +289,7 @@ void setup() {
 }
 
 void loop() {
+  uptimeClock.observe(static_cast<uint32_t>(millis()));
   // 處理Web伺服器事件
   if (!runtimeReady) return;
   server.handleClient();

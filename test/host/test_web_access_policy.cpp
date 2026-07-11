@@ -65,7 +65,7 @@ static AccessRole authenticate(const std::string& header,
 }
 
 static void testCompileTimeRouteRegistry() {
-  static_assert(kRoutePolicyCount == 16,
+  static_assert(kRoutePolicyCount == 18,
                 "every supported GET/POST route must be classified");
   static_assert(routeTableIsValid(),
                 "route registry must be unique and fail closed");
@@ -94,6 +94,8 @@ static void testCompileTimeRouteRegistry() {
     {HttpMethod::POST, "/set_bp_model",       AccessRole::ADMIN, 64,  true},
     {HttpMethod::GET,  "/security",           AccessRole::ADMIN, 0,   false},
     {HttpMethod::POST, "/rotate_credentials", AccessRole::ADMIN, 64,  true},
+    {HttpMethod::GET,  "/measurement_policy", AccessRole::ADMIN, 0,   false},
+    {HttpMethod::POST, "/set_measurement_policy", AccessRole::ADMIN, 512, true},
     {HttpMethod::POST, "/reset",               AccessRole::ADMIN, 0,   true},
   };
 
@@ -141,6 +143,44 @@ static void testCompileTimeRouteRegistry() {
   CHECK_TRUE(configure != nullptr &&
                worstCaseConfigureBody.size() <= configure->bodyCap,
              "maximum legal configure form fits route cap");
+}
+
+static void testRoleToSurfacePolicy() {
+  static const WebSurface staffSurfaces[] = {
+    WebSurface::MONITOR_NAV,
+    WebSurface::HISTORY_NAV,
+  };
+  static const WebSurface adminSurfaces[] = {
+    WebSurface::ADMIN_WIFI_NAV,
+    WebSurface::ADMIN_MODEL_NAV,
+    WebSurface::ADMIN_SECURITY_NAV,
+    WebSurface::ADMIN_POLICY_NAV,
+    WebSurface::RESET_CONTROL,
+    WebSurface::CLEAR_HISTORY_CONTROL,
+    WebSurface::POLICY_UPDATE_CONTROL,
+  };
+  for (WebSurface surface : staffSurfaces) {
+    CHECK_TRUE(!surfaceVisible(AccessRole::NONE, surface),
+               "anonymous sees no authenticated surface");
+    CHECK_TRUE(surfaceVisible(AccessRole::STAFF, surface),
+               "staff sees each staff navigation surface");
+    CHECK_TRUE(surfaceVisible(AccessRole::ADMIN, surface),
+               "admin inherits each staff navigation surface");
+  }
+  for (WebSurface surface : adminSurfaces) {
+    CHECK_TRUE(!surfaceVisible(AccessRole::NONE, surface),
+               "anonymous cannot discover admin surface");
+    CHECK_TRUE(!surfaceVisible(AccessRole::STAFF, surface),
+               "staff cannot discover any admin navigation or control");
+    CHECK_TRUE(surfaceVisible(AccessRole::ADMIN, surface),
+               "admin sees each admin navigation or control");
+  }
+  CHECK_TRUE(!surfaceVisible(static_cast<AccessRole>(0xff),
+                             WebSurface::ADMIN_POLICY_NAV),
+             "corrupt role fails closed for surface discovery");
+  CHECK_TRUE(!surfaceVisible(AccessRole::ADMIN,
+                             static_cast<WebSurface>(0xff)),
+             "corrupt surface fails closed");
 }
 
 static void testClaimBoundary() {
@@ -255,6 +295,8 @@ static void testClaimedRoleMatrix() {
     {HttpMethod::POST, "/set_bp_model"},
     {HttpMethod::GET, "/security"},
     {HttpMethod::POST, "/rotate_credentials"},
+    {HttpMethod::GET, "/measurement_policy"},
+    {HttpMethod::POST, "/set_measurement_policy"},
     {HttpMethod::POST, "/reset"},
   };
   for (const AdminRoute& route : adminRoutes) {
@@ -599,6 +641,7 @@ static void testUnsignedClockWrap() {
 
 int main() {
   testCompileTimeRouteRegistry();
+  testRoleToSurfacePolicy();
   testClaimBoundary();
   testDeviceSecurityClaimStateIsThePolicyState();
   testClaimedRoleMatrix();

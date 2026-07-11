@@ -20,6 +20,37 @@ enum class AccessRole : uint8_t {
   ADMIN = 2,
 };
 
+enum class WebSurface : uint8_t {
+  MONITOR_NAV = 0,
+  HISTORY_NAV,
+  ADMIN_WIFI_NAV,
+  ADMIN_MODEL_NAV,
+  ADMIN_SECURITY_NAV,
+  ADMIN_POLICY_NAV,
+  RESET_CONTROL,
+  CLEAR_HISTORY_CONTROL,
+  POLICY_UPDATE_CONTROL,
+};
+
+inline constexpr bool surfaceVisible(AccessRole role, WebSurface surface) {
+  if (role != AccessRole::STAFF && role != AccessRole::ADMIN) return false;
+  switch (surface) {
+    case WebSurface::MONITOR_NAV:
+    case WebSurface::HISTORY_NAV:
+      return true;
+    case WebSurface::ADMIN_WIFI_NAV:
+    case WebSurface::ADMIN_MODEL_NAV:
+    case WebSurface::ADMIN_SECURITY_NAV:
+    case WebSurface::ADMIN_POLICY_NAV:
+    case WebSurface::RESET_CONTROL:
+    case WebSurface::CLEAR_HISTORY_CONTROL:
+    case WebSurface::POLICY_UPDATE_CONTROL:
+      return role == AccessRole::ADMIN;
+    default:
+      return false;
+  }
+}
+
 enum class RequestInterface : uint8_t {
   PROVISIONING_AP,
   RECOVERY_AP,
@@ -65,6 +96,8 @@ inline constexpr RoutePolicy kRoutePolicies[] = {
   {HttpMethod::POST, "/set_bp_model",       AccessRole::ADMIN, 64,  true,  true},
   {HttpMethod::GET,  "/security",           AccessRole::ADMIN, 0,   false, true},
   {HttpMethod::POST, "/rotate_credentials", AccessRole::ADMIN, 64,  true,  true},
+  {HttpMethod::GET,  "/measurement_policy", AccessRole::ADMIN, 0,   false, true},
+  {HttpMethod::POST, "/set_measurement_policy", AccessRole::ADMIN, 512, true, true},
   {HttpMethod::POST, "/reset",               AccessRole::ADMIN, 0,   true,  true},
 };
 
@@ -82,7 +115,7 @@ constexpr bool cStringEquals(const char* left, const char* right) {
 }
 
 constexpr bool routeTableIsValid() {
-  if (kRoutePolicyCount != 16) return false;
+  if (kRoutePolicyCount != 18) return false;
   for (size_t i = 0; i < kRoutePolicyCount; ++i) {
     const RoutePolicy& route = kRoutePolicies[i];
     if (route.path == nullptr || route.path[0] != '/' || !route.noStore) {

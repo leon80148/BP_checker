@@ -22,8 +22,10 @@ TLS gateway。
 3. 輸入一次性啟用碼；將產生的 admin、staff 與復原 AP 秘密立即存入診所核准的
    密碼管理器。不要拍照、貼標籤或傳到聊天工具。
 4. 用 admin 開啟 `/security`，建立並離線保存「實體復原碼」。
-5. 用 admin 開啟 `/config`，只加入隔離的診所 Wi-Fi；重新啟動後確認 AP 關閉。
-6. 用 staff 登入，確認只能看到監控、歷史、API 與 CSV；看不到設定、清除、重設、
+5. 用 admin 開啟 `/measurement_policy`，核准政策名稱、遞增版本、複核/緊急/脈搏
+   門檻與 stale interval。確認重新啟動後同一版本完整載入。
+6. 用 admin 開啟 `/config`，只加入隔離的診所 Wi-Fi；重新啟動後確認 AP 關閉。
+7. 用 staff 登入，確認只能看到監控、歷史、API 與 CSV；看不到設定、清除、重設、
    憑證或型號控制。再直接請求管理者端點，確認回應被拒絕。
 
 ## 血壓計與驗收
@@ -51,6 +53,14 @@ TLS gateway。
 API 的 `revision` 使用持久化 `uint64_t record_sequence`，ring 滿後仍會增加。revision
 改變時首頁整體更新 KPI、最近歷史與去識別化 diagnostic state。輪詢失敗會顯示
 中斷與最後成功更新時間，不會靜默保留看似即時的畫面。
+
+裝置每次 main loop 都把 32-bit `millis()` 觀察值累積為 64-bit uptime；stale 與最後
+成功接收 age 不依賴瀏覽器輪詢，跨多次約 49.7 天 wrap 也不會回到 current/0。
+
+量測政策以 `bp_policy/policy_state` 單一 versioned/checksummed blob 保存。管理者更新
+必須使用更大的政策版本；門檻、名稱、版本或 stale interval 任一不合法都不寫入。
+開機讀到錯誤型別、長度、CRC 或語意時 fail closed，需受控服務處理，不能以 factory
+default 繼續顯示臨床提示。
 
 ## 保存、匯出與隱私
 

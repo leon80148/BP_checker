@@ -11,6 +11,7 @@
 #include <utility>
 
 #include "BP_Parser.h"
+#include "MeasurementPolicy.h"
 
 // Crash-consistent record storage. v3_state is the only activation point;
 // each v3_N slot is independently atomic and self-validating. No native C++
@@ -36,7 +37,8 @@ private:
   bool _storageHealthy = false;
   bool _sequenceExhausted = false;
   uint64_t _lastSuccessfulRecordSequence = 0;
-  uint32_t _lastSuccessfulReceiveMs = 0;
+  uint64_t _lastSuccessfulReceiveMs = 0;
+  MonotonicMillis64* _uptimeClock = nullptr;
   Preferences _preferences;
 
   struct Candidate {
@@ -688,9 +690,11 @@ private:
   }
 
 public:
-  explicit BP_RecordManager(int maxRecords = 10)
+  explicit BP_RecordManager(int maxRecords = 10,
+                            MonotonicMillis64* uptimeClock = nullptr)
     : _maxRecords(maxRecords > 0 ? maxRecords : 1),
-      _records(new BPData[maxRecords > 0 ? maxRecords : 1]) {}
+      _records(new BPData[maxRecords > 0 ? maxRecords : 1]),
+      _uptimeClock(uptimeClock) {}
 
   ~BP_RecordManager() { delete[] _records; }
 
@@ -726,7 +730,8 @@ public:
     const uint64_t acceptedSequence = record.recordSequence;
     appendChronological(std::move(record));
     _lastSuccessfulRecordSequence = acceptedSequence;
-    _lastSuccessfulReceiveMs = static_cast<uint32_t>(millis());
+    _lastSuccessfulReceiveMs = _uptimeClock == nullptr
+      ? static_cast<uint64_t>(millis()) : _uptimeClock->nowMs();
     _nextSequence++;
     return true;
   }
@@ -754,8 +759,9 @@ public:
       getLatestRecord().recordSequence == _lastSuccessfulRecordSequence;
   }
 
-  bool lastSuccessfulReceiveAgeMs(uint32_t nowMs, uint32_t& ageMs) const {
+  bool lastSuccessfulReceiveAgeMs(uint64_t nowMs, uint64_t& ageMs) const {
     if (!latestReceivedThisBoot()) return false;
+    if (nowMs < _lastSuccessfulReceiveMs) return false;
     ageMs = nowMs - _lastSuccessfulReceiveMs;
     return true;
   }

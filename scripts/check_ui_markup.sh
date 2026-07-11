@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 FILE="lib/WebHandler.h"
+SKETCH="BP_checker.ino"
 for token in \
   "--bg" "--surface" "--primary" \
   "app-shell" "top-nav" "panel" "btn" \
@@ -20,9 +21,68 @@ for token in \
   "data_loss_count" "reconnect_count" "diagnostic_state" \
   "measurementReferencePolicyName()" "repeatedMeasurementGuidance()" \
   "bpRevision" "location.reload()" "poll-failure" "最後成功更新" \
-  "server->currentRole() == bp_web::AccessRole::ADMIN"
+  "/measurement_policy" "/set_measurement_policy" \
+  "policy-name" "policy-version" "review-systolic" "stale-seconds" \
+  "surfaceVisible(server->currentRole()" \
+  "data-loss-count" "reconnect-count" \
+  "loss.textContent=d.data_loss_count" "reconnect.textContent=d.reconnect_count" \
+  "時間來源"
 do
   grep -Fq -- "$token" "$FILE" || { echo "missing token: $token"; exit 1; }
+done
+
+for token in \
+  "MonotonicMillis64 uptimeClock" \
+  "uptimeClock.observe(static_cast<uint32_t>(millis()))" \
+  "MeasurementPolicyStore measurementPolicyStore" \
+  "measurementPolicyStore.loadOrCreate()"
+do
+  grep -Fq -- "$token" "$SKETCH" || {
+    echo "missing main-loop monotonic clock contract: $token"
+    exit 1
+  }
+done
+
+observe_line=$(grep -nF \
+  "uptimeClock.observe(static_cast<uint32_t>(millis()))" "$SKETCH" \
+  | tail -1 | cut -d: -f1)
+web_line=$(grep -nF "server.handleClient();" "$SKETCH" | tail -1 | cut -d: -f1)
+if [[ -z "$observe_line" || -z "$web_line" || ! "$observe_line" -lt "$web_line" ]]; then
+  echo "main-loop clock must be observed before browser polling"
+  exit 1
+fi
+
+policy_load_line=$(grep -nF "measurementPolicyStore.loadOrCreate()" "$SKETCH" \
+  | head -1 | cut -d: -f1)
+runtime_ready_line=$(grep -nF "runtimeReady = true;" "$SKETCH" \
+  | head -1 | cut -d: -f1)
+if [[ -z "$policy_load_line" || -z "$runtime_ready_line" || \
+      ! "$policy_load_line" -lt "$runtime_ready_line" ]]; then
+  echo "validated measurement policy must load before runtime readiness"
+  exit 1
+fi
+
+for forbidden_default in \
+  "classifyMeasurement(latest)" \
+  "classifyMeasurement(record)" \
+  "MeasurementPolicyConfig{}.staleAfterMs"
+do
+  if grep -Fq -- "$forbidden_default" "$FILE"; then
+    echo "production Web path still uses an implicit default policy: $forbidden_default"
+    exit 1
+  fi
+done
+
+for required_injection in \
+  "classifyMeasurement(latest, activePolicy())" \
+  "classifyMeasurement(record, activePolicy())" \
+  "input.staleAfterMs = activePolicy().staleAfterMs" \
+  "policy_name" "policy_version"
+do
+  grep -Fq -- "$required_injection" "$FILE" || {
+    echo "active persisted policy is not injected everywhere: $required_injection"
+    exit 1
+  }
 done
 
 for token in \
@@ -62,13 +122,6 @@ do
     exit 1
   }
 done
-
-admin_surface_guards=$(grep -Fc -- \
-  "server->currentRole() == bp_web::AccessRole::ADMIN" "$FILE")
-if (( admin_surface_guards < 3 )); then
-  echo "admin surfaces are not separately guarded"
-  exit 1
-fi
 
 for forbidden in "正常" "異常" "patient_id" "patientId" "病患編號" "病歷號"; do
   if grep -Fq -- "$forbidden" "$FILE"; then

@@ -85,6 +85,10 @@
 脈搏規則由診所核准設定。每次有效量測後會提示至少間隔 1 分鐘再量一次，兩筆
 資料分別保存，不會自動平均。
 
+管理者需在 `/measurement_policy` 檢視或更新具名稱與遞增版本的診所政策。名稱、
+版本、血壓/脈搏門檻及 stale interval 以單一 checksummed NVS image 持久化；UI 與
+API 只使用已驗證的 active policy。損毀或無法載入時裝置不會退回隱含預設值啟動。
+
 ### 查看歷史記錄
 
 打開 `/history`，你會看到：

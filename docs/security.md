@@ -14,6 +14,8 @@
 - staff 只能讀取/匯出去識別量測與 operations state；管理、清除、網路、reset、型號與
   憑證輪替只允許 admin，staff 頁面也不呈現這些控制。
 - 記錄 slot、state、clear tombstone 與安全 bundle 都有 crash-consistent 邊界。
+- 診所量測政策只允許 admin 透過 `/measurement_policy` 更新；全部欄位綁在單一
+  versioned/checksummed NVS image，版本必須遞增，讀取損毀時 fail closed。
 
 ## HTTP 與網路殘餘風險
 
@@ -49,11 +51,17 @@
 但 NVS remove/覆寫不是鑑識級抹除：未啟用 flash encryption/secure boot 或整個 partition
 安全擦除時，具備實體 flash 取證能力者仍可能復原舊頁面。因此：
 
-1. 退役前先匯出必要記錄並執行 decommission reset。
-2. 確認網路、歷史、安全秘密與敏感 RAM 清理流程完成。
-3. 高風險環境需啟用經驗證的 flash encryption 與 secure boot，或以可稽核方式擦除/銷毀
+目前 Web/route registry **沒有曝露可呼叫的 decommission reset**；`/reset` 只處理網路
+wipe，不能當成退役清除。這是自助退役的 release blocker／受控服務限制，不能指示
+操作人員呼叫不存在的功能。退役必須由核准服務流程：
+
+1. 隔離裝置並匯出依法需保留的記錄。
+2. 由受控維護工具離線擦除 application NVS/安全狀態與歷史，或直接銷毀儲存媒體；
+   在正式 decommission surface 完成並驗證前，不得把一般 Web reset 當替代方案。
+3. 確認網路、歷史、安全秘密與敏感 RAM 清理流程完成。
+4. 高風險環境需啟用經驗證的 flash encryption 與 secure boot，或以可稽核方式擦除/銷毀
    儲存媒體；不要把邏輯刪除宣稱為安全抹除。
-4. 保存退役人員、裝置識別、時間、firmware SHA 與處理結果，不保存秘密本身。
+5. 保存退役人員、裝置識別、時間、firmware SHA 與處理結果，不保存秘密本身。
 
 ## 安全事件處置
 

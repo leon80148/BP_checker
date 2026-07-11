@@ -27,6 +27,8 @@ private:
   String* transportName;
   String* transportStatus;
   MonitorTransport* monitorTransport;
+  MonotonicMillis64* uptimeClock;
+  MeasurementPolicyStore* measurementPolicyStore;
   // 全域 ap_*/hostname 是 const char* 編譯期常數（bp_checker.ino），
   // 用單層 const char* 即可，省一層 indirection
   const char* hostname;
@@ -71,6 +73,10 @@ private:
       ? "value-good" : "value-bad";
   }
 
+  const MeasurementPolicyConfig& activePolicy() const {
+    return measurementPolicyStore->config();
+  }
+
   bool isTransportConnected() const {
     if (monitorTransport == nullptr) return false;
     const MonitorTransportState state = monitorTransport->state();
@@ -78,7 +84,7 @@ private:
            state == TRANSPORT_STATE_RECEIVING;
   }
 
-  MeasurementFreshnessState latestFreshness(uint32_t nowMs) const {
+  MeasurementFreshnessState latestFreshness(uint64_t nowMs) const {
     MeasurementFreshnessInput input;
     input.hasRecord = recordManager->getRecordCount() > 0;
     if (input.hasRecord) {
@@ -87,7 +93,8 @@ private:
     input.receivedThisBoot = recordManager->latestReceivedThisBoot();
     input.transportConnected = isTransportConnected();
     input.nowMs = nowMs;
-    uint32_t receiveAge = 0;
+    input.staleAfterMs = activePolicy().staleAfterMs;
+    uint64_t receiveAge = 0;
     if (recordManager->lastSuccessfulReceiveAgeMs(nowMs, receiveAge)) {
       input.lastSuccessfulReceiveMs = nowMs - receiveAge;
     }
@@ -302,12 +309,29 @@ private:
     html += "<span class='chip'>Health Monitor</span>";
     html += "</header>";
     html += "<nav class='top-nav' aria-label='主要導覽'>";
-    navLink(html, "/", "監控", activePath);
-    navLink(html, "/history", "歷史記錄", activePath);
-    if (server->currentRole() == bp_web::AccessRole::ADMIN) {
+    if (bp_web::surfaceVisible(server->currentRole(),
+                               bp_web::WebSurface::MONITOR_NAV)) {
+      navLink(html, "/", "監控", activePath);
+    }
+    if (bp_web::surfaceVisible(server->currentRole(),
+                               bp_web::WebSurface::HISTORY_NAV)) {
+      navLink(html, "/history", "歷史記錄", activePath);
+    }
+    if (bp_web::surfaceVisible(server->currentRole(),
+                               bp_web::WebSurface::ADMIN_WIFI_NAV)) {
       navLink(html, "/config", "WiFi 設定", activePath);
+    }
+    if (bp_web::surfaceVisible(server->currentRole(),
+                               bp_web::WebSurface::ADMIN_MODEL_NAV)) {
       navLink(html, "/bp_model", "型號設定", activePath);
+    }
+    if (bp_web::surfaceVisible(server->currentRole(),
+                               bp_web::WebSurface::ADMIN_SECURITY_NAV)) {
       navLink(html, "/security", "管理者安全設定", activePath);
+    }
+    if (bp_web::surfaceVisible(server->currentRole(),
+                               bp_web::WebSurface::ADMIN_POLICY_NAV)) {
+      navLink(html, "/measurement_policy", "量測政策", activePath);
     }
     html += "</nav>";
     html += "<main id='main-content'>";
@@ -327,6 +351,8 @@ public:
              BP_Parser* bpParser,
              String* bp_model, String* lastData, String* transportName, String* transportStatus,
              MonitorTransport* monitorTransport,
+             MonotonicMillis64* uptimeClock,
+             MeasurementPolicyStore* measurementPolicyStore,
              const char* hostname, const char* ap_ssid)
     : server(server),
       deviceSecurity(deviceSecurity),
@@ -338,6 +364,8 @@ public:
       transportName(transportName),
       transportStatus(transportStatus),
       monitorTransport(monitorTransport),
+      uptimeClock(uptimeClock),
+      measurementPolicyStore(measurementPolicyStore),
       hostname(hostname),
       ap_ssid(ap_ssid) {}
 
@@ -369,6 +397,10 @@ public:
                [this]() { this->handleSecurityPage(); });
     server->on("/rotate_credentials", HTTP_POST,
                [this]() { this->handleRotateCredentials(); });
+    server->on("/measurement_policy", HTTP_GET,
+               [this]() { this->handleMeasurementPolicyPage(); });
+    server->on("/set_measurement_policy", HTTP_POST,
+               [this]() { this->handleSetMeasurementPolicy(); });
     server->on("/reset", HTTP_POST, [this]() { this->handleReset(); });
   }
 
@@ -549,6 +581,125 @@ private:
     server->send(restartScheduled ? 200 : 503,
                  "text/html; charset=UTF-8", html);
     secureWipeString(html);
+  }
+
+  void handleMeasurementPolicyPage() {
+    const MeasurementPolicyConfig& policy = activePolicy();
+    String html = buildPageStart("量測複核政策", "/measurement_policy");
+    html.reserve(12288);
+    html += "<section class='panel form-shell'><h2>目前政策</h2>";
+    html += "<p class='helper-text'>此設定由診所管理者維護；每次變更必須使用更大的政策版本。";
+    html += measurementReferencePolicyName();
+    html += "。</p><ul class='status-list'><li><span>政策名稱</span><strong>";
+    html += htmlEscape(String(policy.policyName));
+    html += "</strong></li><li><span>政策版本</span><strong>";
+    html += policy.policyVersion;
+    html += "</strong></li></ul></section>";
+
+    if (bp_web::surfaceVisible(server->currentRole(),
+                               bp_web::WebSurface::POLICY_UPDATE_CONTROL)) {
+      html += "<section class='panel form-shell'><h2>更新政策</h2>";
+      html += "<form method='post' action='/set_measurement_policy'>";
+      html += "<label class='field-label' for='policy-name'>政策名稱（英數、空格、._-()）</label>";
+      html += "<input id='policy-name' name='policy_name' maxlength='32' required value='";
+      html += htmlEscape(String(policy.policyName));
+      html += "'>";
+      html += "<label class='field-label' for='policy-version'>新政策版本</label>";
+      html += "<input id='policy-version' name='policy_version' inputmode='numeric' required value='";
+      html += policy.policyVersion + 1U;
+      html += "'>";
+      html += "<label class='field-label' for='review-systolic'>收縮壓複核門檻</label>";
+      html += "<input id='review-systolic' name='review_systolic' inputmode='numeric' required value='";
+      html += policy.reviewSystolic;
+      html += "'>";
+      html += "<label class='field-label' for='review-diastolic'>舒張壓複核門檻</label>";
+      html += "<input id='review-diastolic' name='review_diastolic' inputmode='numeric' required value='";
+      html += policy.reviewDiastolic;
+      html += "'>";
+      html += "<label class='field-label' for='pulse-low'>脈搏下限</label>";
+      html += "<input id='pulse-low' name='pulse_low' inputmode='numeric' required value='";
+      html += policy.reviewPulseLow;
+      html += "'>";
+      html += "<label class='field-label' for='pulse-high'>脈搏上限</label>";
+      html += "<input id='pulse-high' name='pulse_high' inputmode='numeric' required value='";
+      html += policy.reviewPulseHigh;
+      html += "'>";
+      html += "<label class='field-label' for='urgent-systolic'>收縮壓緊急提示邊界（高於此值）</label>";
+      html += "<input id='urgent-systolic' name='urgent_systolic' inputmode='numeric' required value='";
+      html += policy.urgentSystolic;
+      html += "'>";
+      html += "<label class='field-label' for='urgent-diastolic'>舒張壓緊急提示邊界（高於此值）</label>";
+      html += "<input id='urgent-diastolic' name='urgent_diastolic' inputmode='numeric' required value='";
+      html += policy.urgentDiastolic;
+      html += "'>";
+      html += "<label class='field-label' for='stale-seconds'>量測逾時秒數</label>";
+      html += "<input id='stale-seconds' name='stale_seconds' inputmode='numeric' required value='";
+      html += policy.staleAfterMs / 1000U;
+      html += "'><button class='btn' type='submit'>驗證並儲存政策</button>";
+      html += "</form></section>";
+    }
+    html += buildPageEnd();
+    server->send(200, "text/html; charset=UTF-8", html);
+  }
+
+  void handleSetMeasurementPolicy() {
+    if (!bp_web::surfaceVisible(server->currentRole(),
+                                bp_web::WebSurface::POLICY_UPDATE_CONTROL)) {
+      server->send(403, "text/plain; charset=UTF-8", "僅限管理者更新政策");
+      return;
+    }
+    static constexpr const char* kFields[] = {
+      "policy_version", "review_systolic", "review_diastolic",
+      "pulse_low", "pulse_high", "urgent_systolic",
+      "urgent_diastolic", "stale_seconds"
+    };
+    uint32_t values[sizeof(kFields) / sizeof(kFields[0])] = {};
+    bool parsed = true;
+    for (size_t i = 0; i < sizeof(kFields) / sizeof(kFields[0]); ++i) {
+      const String field = server->arg(kFields[i]);
+      if (!parseMeasurementPolicyUnsigned(field.c_str(), values[i])) {
+        parsed = false;
+      }
+    }
+    MeasurementPolicyConfig candidate = activePolicy();
+    const String policyName = server->arg("policy_name");
+    parsed = parsed && copyMeasurementPolicyName(candidate,
+                                                  policyName.c_str());
+    for (size_t i = 1; i <= 6; ++i) {
+      if (values[i] > static_cast<uint32_t>(INT_MAX)) parsed = false;
+    }
+    if (values[7] > 86400U) parsed = false;
+    if (!parsed) {
+      server->send(400, "text/plain; charset=UTF-8", "量測政策欄位格式無效");
+      return;
+    }
+    candidate.policyVersion = values[0];
+    candidate.reviewSystolic = static_cast<int>(values[1]);
+    candidate.reviewDiastolic = static_cast<int>(values[2]);
+    candidate.reviewPulseLow = static_cast<int>(values[3]);
+    candidate.reviewPulseHigh = static_cast<int>(values[4]);
+    candidate.urgentSystolic = static_cast<int>(values[5]);
+    candidate.urgentDiastolic = static_cast<int>(values[6]);
+    candidate.staleAfterMs = values[7] * 1000U;
+    const MeasurementPolicyResult result = measurementPolicyStore->update(candidate);
+    if (result == MeasurementPolicyResult::INVALID_POLICY) {
+      server->send(400, "text/plain; charset=UTF-8",
+                   "量測政策門檻或版本無效；未變更目前政策");
+      return;
+    }
+    if (result != MeasurementPolicyResult::OK) {
+      server->send(503, "text/plain; charset=UTF-8",
+                   "量測政策未能確認持久化；裝置維持安全狀態");
+      return;
+    }
+    String html = buildPageStart("量測政策已更新", "/measurement_policy",
+                                 false,
+                                 "<meta http-equiv='refresh' content='2;url=/measurement_policy'>");
+    html += "<section class='panel'><h2>政策已驗證並持久化</h2>";
+    html += "<p class='helper-text'>所有後續 UI 與 API 複核、新鮮度判定立即使用新版本。</p>";
+    html += "</section>";
+    html += buildPageEnd();
+    server->send(200, "text/html; charset=UTF-8", html);
   }
 
   void handleReset() {
@@ -843,7 +994,7 @@ private:
     String html = buildPageStart("血壓監控儀表板", "/", false);
     html.reserve(14336);
 
-    const uint32_t nowMs = static_cast<uint32_t>(millis());
+    const uint64_t nowMs = uptimeClock == nullptr ? 0 : uptimeClock->nowMs();
     const int recordCount = recordManager->getRecordCount();
     const MeasurementFreshnessState freshness = latestFreshness(nowMs);
     html += "<div id='measurement-freshness' class='freshness-banner' data-state='";
@@ -857,7 +1008,8 @@ private:
       const bool sysOk = latest.valid && latest.systolic > 0;
       const bool diaOk = latest.valid && latest.diastolic > 0;
       const bool pulOk = latest.valid && latest.pulse > 0;
-      const MeasurementReviewState review = classifyMeasurement(latest);
+      const MeasurementReviewState review =
+        classifyMeasurement(latest, activePolicy());
 
       html += "<section class='panel latest-vitals'>";
       html += "<div class='section-head'><h2>最新量測</h2>";
@@ -868,6 +1020,10 @@ private:
       html += measurementReviewLabel(review);
       html += "。";
       html += measurementReferencePolicyName();
+      html += "。目前政策：";
+      html += htmlEscape(String(activePolicy().policyName));
+      html += " v";
+      html += activePolicy().policyVersion;
       html += "。</p>";
       html += "<div class='kpi-grid'>";
 
@@ -894,6 +1050,7 @@ private:
       html += "<div class='table-scroll'><table>";
       html += "<caption>最近五筆不識別量測記錄</caption><thead><tr>";
       html += "<th scope='col'>記錄序號</th><th scope='col'>測量時間</th>";
+      html += "<th scope='col'>時間來源</th>";
       html += "<th scope='col'>收縮壓 (mmHg)</th><th scope='col'>舒張壓 (mmHg)</th>";
       html += "<th scope='col'>脈搏 (bpm)</th><th scope='col'>品質</th>";
       html += "<th scope='col'>複核提示</th></tr></thead><tbody>";
@@ -905,6 +1062,8 @@ private:
         appendUInt64(html, record.recordSequence);
         html += "</td><td>";
         html += record.timestamp;
+        html += "</td><td>";
+        html += timestampSourceCode(record.timestampSource);
         html += "</td>";
         renderTableValueCell(html, record.systolic, record.valid);
         renderTableValueCell(html, record.diastolic, record.valid);
@@ -913,7 +1072,8 @@ private:
         html += measurementQualityCode(record.quality);
         html += record.movementCount > 0 ? "（偵測到移動）" : "（未偵測到移動）";
         html += "</td><td>";
-        html += measurementReviewLabel(classifyMeasurement(record));
+        html += measurementReviewLabel(
+          classifyMeasurement(record, activePolicy()));
         html += "</td>";
         html += "</tr>";
       }
@@ -961,9 +1121,9 @@ private:
     html += "<li><span>支援協定</span><strong>";
     html += supportedMeasurementProtocol();
     html += "</strong></li>";
-    html += "<li><span>資料遺失事件</span><strong>";
+    html += "<li><span>資料遺失事件</span><strong id='data-loss-count'>";
     html += monitorTransport == nullptr ? 0U : monitorTransport->dataLossCount();
-    html += "</strong></li><li><span>重新連線次數</span><strong>";
+    html += "</strong></li><li><span>重新連線次數</span><strong id='reconnect-count'>";
     html += monitorTransport == nullptr ? 0U : monitorTransport->reconnectCount();
     html += "</strong></li>";
     html += "<li><span>WiFi IP</span><strong id='conn-ip'>";
@@ -979,7 +1139,8 @@ private:
     html += "</ul>";
     html += "</section>";
 
-    if (server->currentRole() == bp_web::AccessRole::ADMIN) {
+    if (bp_web::surfaceVisible(server->currentRole(),
+                               bp_web::WebSurface::RESET_CONTROL)) {
       html += "<section class='panel danger-zone'>";
       html += "<h3>僅限管理者：維護操作</h3>";
       html += "<p class='helper-text'>若要重新配網，可重置 WiFi 設定並重啟。</p>";
@@ -1004,6 +1165,8 @@ private:
         "const s=document.getElementById('conn-status');if(s)s.textContent=d.transport_status;"
         "const ip=document.getElementById('conn-ip');if(ip)ip.textContent=d.wifi_ip||'未連線';"
         "const x=document.getElementById('diagnostic-state');if(x)x.textContent=d.diagnostic_state;"
+        "const loss=document.getElementById('data-loss-count');if(loss)loss.textContent=d.data_loss_count;"
+        "const reconnect=document.getElementById('reconnect-count');if(reconnect)reconnect.textContent=d.reconnect_count;"
         "bpFreshness(d.freshness_state,d.freshness_label,d.last_successful_receive_age_ms);"
         "if(d.count>0){"
           "if(!document.getElementById('kpi-sys')){location.reload();return;}"
@@ -1065,7 +1228,8 @@ private:
     html += "<div class='table-scroll'><table>";
     html += "<caption>已保存的不識別量測歷史</caption><thead><tr>";
     html += "<th scope='col'>記錄序號</th><th scope='col'>工作階段序號</th>";
-    html += "<th scope='col'>測量時間</th><th scope='col'>收縮壓 (mmHg)</th>";
+    html += "<th scope='col'>測量時間</th><th scope='col'>時間來源</th>";
+    html += "<th scope='col'>收縮壓 (mmHg)</th>";
     html += "<th scope='col'>舒張壓 (mmHg)</th><th scope='col'>脈搏 (bpm)</th>";
     html += "<th scope='col'>品質</th><th scope='col'>複核提示</th></tr></thead><tbody>";
 
@@ -1079,6 +1243,8 @@ private:
         appendUInt64(html, record.sessionSequence);
         html += "</td><td>";
         html += record.timestamp;
+        html += "</td><td>";
+        html += timestampSourceCode(record.timestampSource);
         html += "</td>";
         renderTableValueCell(html, record.systolic, record.valid);
         renderTableValueCell(html, record.diastolic, record.valid);
@@ -1087,18 +1253,20 @@ private:
         html += measurementQualityCode(record.quality);
         html += record.movementCount > 0 ? "（偵測到移動）" : "（未偵測到移動）";
         html += "</td><td>";
-        html += measurementReviewLabel(classifyMeasurement(record));
+        html += measurementReviewLabel(
+          classifyMeasurement(record, activePolicy()));
         html += "</td>";
         html += "</tr>";
       }
     } else {
-      html += "<tr><td colspan='8'>尚無歷史記錄</td></tr>";
+      html += "<tr><td colspan='9'>尚無歷史記錄</td></tr>";
     }
 
     html += "</tbody></table></div>";
     html += "</section>";
 
-    if (server->currentRole() == bp_web::AccessRole::ADMIN) {
+    if (bp_web::surfaceVisible(server->currentRole(),
+                               bp_web::WebSurface::CLEAR_HISTORY_CONTROL)) {
       html += "<section class='panel danger-zone'>";
       html += "<h3>僅限管理者：危險操作</h3>";
       html += "<p class='helper-text'>此操作會清除全部歷史資料且無法復原。</p>";
@@ -1116,6 +1284,8 @@ private:
     // 內 BPData 不會被修改，pointer 安全。
     JsonDocument doc;
     setUInt64Json(doc["revision"], recordManager->getRevision());
+    doc["policy_name"] = activePolicy().policyName;
+    doc["policy_version"] = activePolicy().policyVersion;
     doc["firmware_version"] = BP_FIRMWARE_VERSION;
     doc["protocol"] = supportedMeasurementProtocol();
     JsonArray records = doc["records"].to<JsonArray>();
@@ -1135,8 +1305,8 @@ private:
       recordObj["quality"] = measurementQualityCode(record.quality);
       recordObj["movement_count"] = record.movementCount;
       recordObj["valid"] = record.valid;
-      recordObj["review_state"] =
-        measurementReviewCode(classifyMeasurement(record));
+      recordObj["review_state"] = measurementReviewCode(
+        classifyMeasurement(record, activePolicy()));
     }
 
     String jsonStr;
@@ -1146,7 +1316,7 @@ private:
 
   void handleLatestAPI() {
     JsonDocument doc;
-    const uint32_t nowMs = static_cast<uint32_t>(millis());
+    const uint64_t nowMs = uptimeClock == nullptr ? 0 : uptimeClock->nowMs();
     const int count = recordManager->getRecordCount();
     const MeasurementFreshnessState freshness = latestFreshness(nowMs);
     doc["count"] = count;
@@ -1157,20 +1327,23 @@ private:
     doc["build_identifier"] = BP_BUILD_SHA;
     doc["protocol"] = supportedMeasurementProtocol();
     doc["reference_policy"] = measurementReferencePolicyName();
+    doc["policy_name"] = activePolicy().policyName;
+    doc["policy_version"] = activePolicy().policyVersion;
     doc["data_loss_count"] = monitorTransport == nullptr
       ? 0U : monitorTransport->dataLossCount();
     doc["reconnect_count"] = monitorTransport == nullptr
       ? 0U : monitorTransport->reconnectCount();
     doc["diagnostic_state"] = sanitizedDiagnosticState();
-    uint32_t receiveAgeMs = 0;
+    uint64_t receiveAgeMs = 0;
     if (recordManager->lastSuccessfulReceiveAgeMs(nowMs, receiveAgeMs)) {
-      doc["last_successful_receive_age_ms"] = receiveAgeMs;
+      setUInt64Json(doc["last_successful_receive_age_ms"], receiveAgeMs);
     } else {
       doc["last_successful_receive_age_ms"] = nullptr;
     }
     if (count > 0) {
       const BPData& latest = recordManager->getLatestRecord();
-      const MeasurementReviewState review = classifyMeasurement(latest);
+      const MeasurementReviewState review =
+        classifyMeasurement(latest, activePolicy());
       setUInt64Json(doc["record_sequence"], latest.recordSequence);
       setUInt64Json(doc["session_sequence"], latest.sessionSequence);
       doc["timestamp"] = latest.timestamp.c_str();
