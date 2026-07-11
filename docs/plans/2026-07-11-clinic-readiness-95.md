@@ -222,9 +222,14 @@ git commit -m "fix(usb): serialize CDC transport state ownership"
 ### Task 6: Introduce Crash-Consistent v3 Persistence
 
 **Files:**
+- Modify: `lib/BPProtocol.h`
 - Modify: `lib/BPRecordManager.h`
+- Modify: `lib/DataProcessor.h`
+- Modify: `lib/WebHandler.h`
 - Modify: `test/host/Preferences.h`
 - Modify: `test/host/test_record_manager.cpp`
+- Modify: `test/host/test_data_processor.cpp`
+- Modify: `scripts/check_ui_markup.sh`
 
 **Step 1: RED, add write-fault injection**
 
@@ -242,14 +247,20 @@ The Preferences fake must inject failure both before application and after appli
 
 Assert `addRecord()` reports persistence failure. A before-apply failure leaves runtime history unchanged and surfaces storage failure instead of durable success. An applied-then-reported failure triggers deterministic reload/reconciliation and may expose only the complete pre-write or post-write history.
 
+Assert the production acquisition path renders and logs acceptance only after `addRecord()` confirms durability. A failed or ambiguous write must expose a storage-specific operator action. History clear must likewise return a non-success response when the tombstone or cleanup reports failure; it may not erase the in-memory diagnostic first and then claim success.
+
 **Step 2: GREEN, store self-validating slots**
 
-Each v3 slot is one atomic value containing schema version, generation, monotonic `uint64_t` sequence, structured fields, and CRC32. Startup scans every slot, validates, filters by committed generation, sorts by sequence, compacts in memory, and derives next sequence. Count/index metadata may be diagnostic but cannot be authoritative. Clear commits a generation/tombstone before optional garbage collection.
+`BPData` gains the opaque `uint64_t` record and session sequences required by the SDD. A single self-validating `v3_state` value atomically binds schema version, active generation, sequence floor, and CRC32. Each v3 slot is one separately atomic binary value containing version, generation, record/session sequences, every structured measurement field, and CRC32; encoding is byte-defined rather than native-struct/padding dependent. Startup validates the state and every slot, filters by committed generation, rejects malformed/duplicate sequences, sorts by record sequence, compacts holes in memory, and derives the next sequence without trusting count/index metadata.
+
+Clear first advances the generation in `v3_state` while retaining the sequence floor, then garbage-collects old v3/v2/legacy keys without ever deleting the active tombstone. Migration stages all v3 slots while legacy metadata remains authoritative and writes `v3_state` as the final activation operation. A present but corrupt v3 state fails closed instead of falling back to stale history.
 
 **Step 3: Verify and commit**
 
 ```bash
-git add lib/BPRecordManager.h test/host/Preferences.h test/host/test_record_manager.cpp
+git add lib/BPProtocol.h lib/BPRecordManager.h lib/DataProcessor.h lib/WebHandler.h \
+  test/host/Preferences.h test/host/test_record_manager.cpp \
+  test/host/test_data_processor.cpp scripts/check_ui_markup.sh
 git commit -m "feat(storage): add crash-consistent record slots"
 ```
 
