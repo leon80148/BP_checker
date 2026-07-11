@@ -173,11 +173,21 @@ bash scripts/check_firmware_update_runtime.sh
 bash scripts/check_security_runtime_integration.sh
 bash scripts/check_ui_markup.sh
 bash scripts/run_host_tests.sh
-arduino-cli compile --profile esp32s3 --board-options USBMode=default \
-  --warnings all --clean .
+bash scripts/run_quality_gate.sh
 ```
 
-The contracts pass, all host executables pass, and the fully linked firmware is
-1,156,036 bytes (88%) with 73,540 bytes of globals. This integration does not
-claim a successful signed installation, rollback drill, or HBP-9030 hardware
-acceptance; those require retained device evidence.
+The exact gate at `110e577` pins Arduino CLI 1.4.1, Arduino-ESP32 3.3.7, and
+ArduinoJson 7.4.2. It passes the project-warning audit (pinned dependency
+warnings are explicitly allowlisted), all host/static/stress stages, and reports
+1,156,036 bytes (88%) with 73,540 bytes of globals.
+
+Independent review then found the pinned Arduino core would auto-confirm a
+pending image in `initArduino()` before `setup()`. The added static contract was
+RED on the missing strong `verifyRollbackLater()` override. At `475ebbb`, the
+sketch defers framework confirmation and the quality gate inspects the linked
+ELF symbol as strong `T`. The clean gate passes at 1,156,044 bytes (88%), 73,540
+bytes globals, and artifact SHA-256
+`27ee999b7f73a7928bcaabcedc7b0fc8de855a8b904201ef40f25844a5572b2f`.
+
+No software-only result claims a successful signed installation, rollback
+drill, or HBP-9030 acceptance; those require retained device evidence.
