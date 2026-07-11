@@ -26,6 +26,7 @@ for token in \
   'esp_ota_begin' 'esp_ota_write' 'esp_ota_end' 'esp_ota_abort' \
   'esp_ota_set_boot_partition' \
   'esp_ota_get_state_partition' \
+  'esp_partition_read' \
   'ESP_OTA_IMG_PENDING_VERIFY' \
   'esp_ota_mark_app_valid_cancel_rollback' \
   'esp_ota_mark_app_invalid_rollback_and_reboot' \
@@ -38,6 +39,31 @@ do
     exit 1
   }
 done
+
+for token in \
+  'verifyRunningImage(' \
+  'constantTimeEqual(' \
+  'if (!_ready) {' \
+  'rollbackIfPending();'
+do
+  grep -Fq -- "$token" "$source" "$header" || {
+    echo "missing pending-image fail-closed contract: $token" >&2
+    exit 1
+  }
+done
+
+hash_line=$(grep -nF 'if (!verifyRunningImage(' "$source" | head -1 | cut -d: -f1)
+pending_line=$(grep -nF '_pendingPolicy.beginPending(' "$source" | head -1 | cut -d: -f1)
+clear_line=$(grep -nF 'clearPendingReceipt()' "$source" | tail -1 | cut -d: -f1)
+valid_line=$(grep -nF 'esp_ota_mark_app_valid_cancel_rollback()' "$source" | head -1 | cut -d: -f1)
+if [[ -z "$hash_line" || -z "$pending_line" || ! "$hash_line" -lt "$pending_line" ]]; then
+  echo "running image hash must verify before pending-health state" >&2
+  exit 1
+fi
+if [[ -z "$clear_line" || -z "$valid_line" || ! "$clear_line" -lt "$valid_line" ]]; then
+  echo "pending receipt must clear durably before mark-valid" >&2
+  exit 1
+fi
 
 if rg -n 'PRIVATE KEY|BEGIN EC PRIVATE|BEGIN PRIVATE' "$anchor" "$source" "$header"; then
   echo "private signing key material is forbidden" >&2

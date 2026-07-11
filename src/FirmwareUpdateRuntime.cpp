@@ -125,11 +125,11 @@ bool FirmwareUpdateRuntime::begin(bool allowFirstInitialization) {
     _lastResult = bp_update::Result::STORAGE_FAILURE;
     return false;
   }
+  _pendingVerify = imageState == ESP_OTA_IMG_PENDING_VERIFY;
   bool receiptPresent = false;
   _lastResult = loadPendingReceipt(receiptPresent);
   if (_lastResult != bp_update::Result::OK) return false;
 
-  _pendingVerify = imageState == ESP_OTA_IMG_PENDING_VERIFY;
   if (_pendingVerify) {
     if (!receiptPresent) {
       _lastResult = bp_update::Result::STORAGE_CORRUPT;
@@ -145,6 +145,10 @@ bool FirmwareUpdateRuntime::begin(bool allowFirstInitialization) {
       "esp32:esp32:esp32s3", _sequenceStore.sequence(), verifier,
       _authorized);
     if (_lastResult != bp_update::Result::OK) return false;
+    if (!verifyRunningImage(running, _authorized.manifest())) {
+      _lastResult = bp_update::Result::ARTIFACT_HASH;
+      return false;
+    }
     _lastResult = _pendingPolicy.beginPending(_authorized);
     if (_lastResult != bp_update::Result::OK) return false;
     _hasAuthorization = true;
@@ -214,6 +218,38 @@ bool FirmwareUpdateRuntime::verifySignature(
   secureZero(anchor, sizeof(anchor));
   secureZero(digest, sizeof(digest));
   return verified;
+}
+
+bool FirmwareUpdateRuntime::verifyRunningImage(
+    const esp_partition_t* running, const bp_update::Manifest& manifest) {
+  if (running == nullptr || manifest.artifactSize == 0 ||
+      manifest.artifactSize > running->size) {
+    return false;
+  }
+  uint8_t expected[32] = {};
+  uint8_t actual[32] = {};
+  uint8_t chunk[bp_http::BoundedStreamConsumer::kChunkLimit] = {};
+  if (!bp_update::decodeSha256(manifest.artifactSha256, expected)) {
+    return false;
+  }
+  mbedtls_sha256_context sha;
+  mbedtls_sha256_init(&sha);
+  bool ok = mbedtls_sha256_starts(&sha, 0) == 0;
+  uint32_t offset = 0;
+  while (ok && offset < manifest.artifactSize) {
+    size_t take = manifest.artifactSize - offset;
+    if (take > sizeof(chunk)) take = sizeof(chunk);
+    ok = esp_partition_read(running, offset, chunk, take) == ESP_OK &&
+         mbedtls_sha256_update(&sha, chunk, take) == 0;
+    offset += static_cast<uint32_t>(take);
+  }
+  ok = ok && mbedtls_sha256_finish(&sha, actual) == 0 &&
+       bp_update::constantTimeEqual(actual, expected, sizeof(actual));
+  mbedtls_sha256_free(&sha);
+  secureZero(expected, sizeof(expected));
+  secureZero(actual, sizeof(actual));
+  secureZero(chunk, sizeof(chunk));
+  return ok;
 }
 
 bp_update::Result FirmwareUpdateRuntime::authorizeUpdate(
@@ -451,12 +487,11 @@ bool FirmwareUpdateRuntime::clearPendingReceipt() {
   if (_preferences == nullptr || !_preferences->begin(kNamespace, false)) {
     return false;
   }
-  const bool cleared = !_preferences->isKey(kPendingKey) ||
-                       _preferences->remove(kPendingKey);
+  if (_preferences->isKey(kPendingKey)) (void)_preferences->remove(kPendingKey);
   const bool absent = !_preferences->isKey(kPendingKey);
   _preferences->end();
-  if (cleared && absent) secureZero(&_receipt, sizeof(_receipt));
-  return cleared && absent;
+  if (absent) secureZero(&_receipt, sizeof(_receipt));
+  return absent;
 }
 
 bool FirmwareUpdateRuntime::confirmBootThunk(void* context) {
@@ -465,20 +500,21 @@ bool FirmwareUpdateRuntime::confirmBootThunk(void* context) {
 }
 
 bool FirmwareUpdateRuntime::confirmBoot() {
-  return esp_ota_mark_app_valid_cancel_rollback() == ESP_OK;
+  return clearPendingReceipt() &&
+         esp_ota_mark_app_valid_cancel_rollback() == ESP_OK;
 }
 
 bool FirmwareUpdateRuntime::confirmPendingBoot(
     const bp_update::HealthSnapshot& health) {
-  if (!_ready || !_pendingVerify) return true;
+  if (!_pendingVerify) return _ready;
+  if (!_ready) {
+    rollbackIfPending();
+    return false;
+  }
   _lastResult = _pendingPolicy.evaluate(
     health, this, &FirmwareUpdateRuntime::confirmBootThunk);
   if (_lastResult != bp_update::Result::OK) {
     rollbackIfPending();
-    return false;
-  }
-  if (!clearPendingReceipt()) {
-    _lastResult = bp_update::Result::STORAGE_FAILURE;
     return false;
   }
   _pendingVerify = false;

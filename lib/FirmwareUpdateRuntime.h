@@ -70,6 +70,8 @@ private:
                                    size_t signatureLength);
   bool verifySignature(const uint8_t* manifest, size_t manifestLength,
                        const uint8_t* signature, size_t signatureLength);
+  bool verifyRunningImage(const esp_partition_t* running,
+                          const bp_update::Manifest& manifest);
 
   static bool streamBeginThunk(void* context, uint32_t expectedLength);
   static bool streamWriteThunk(void* context, const uint8_t* bytes,
