@@ -453,8 +453,8 @@ static void testAbsoluteDeadlineAndClockWrap() {
 static void testStableErrorClassification() {
   const std::string headers = "\r\nHost: bp.local\r\n\r\n";
   CHECK_EQ(static_cast<int>(parseError("PUT / HTTP/1.1" + headers)),
-           static_cast<int>(RequestError::METHOD_NOT_ALLOWED),
-           "unsupported method maps to 405-class error");
+           static_cast<int>(RequestError::METHOD_NOT_IMPLEMENTED),
+           "parser-unsupported method has a stable error");
   CHECK_EQ(static_cast<int>(parseError("GET / HTTP/1.0" + headers)),
            static_cast<int>(RequestError::VERSION_NOT_SUPPORTED),
            "unsupported HTTP version maps to 505-class error");
@@ -488,8 +488,8 @@ static void testStableErrorClassification() {
            "invalid Content-Length status mapping");
   CHECK_EQ(httpStatusForError(RequestError::TIMEOUT), 408,
            "timeout status mapping");
-  CHECK_EQ(httpStatusForError(RequestError::METHOD_NOT_ALLOWED), 405,
-           "method status mapping");
+  CHECK_EQ(httpStatusForError(RequestError::METHOD_NOT_IMPLEMENTED), 501,
+           "parser-unsupported method status mapping");
   CHECK_EQ(httpStatusForError(RequestError::EXPECTATION_FAILED), 417,
            "Expect status mapping");
   CHECK_EQ(httpStatusForError(RequestError::REQUEST_LINE_TOO_LONG), 414,

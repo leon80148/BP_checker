@@ -32,7 +32,7 @@ enum class RequestError : uint8_t {
   BAD_REQUEST,
   MISSING_HOST,
   TIMEOUT,
-  METHOD_NOT_ALLOWED,
+  METHOD_NOT_IMPLEMENTED,
   VERSION_NOT_SUPPORTED,
   REQUEST_LINE_TOO_LONG,
   HEADER_FIELDS_TOO_LARGE,
@@ -55,8 +55,8 @@ constexpr int httpStatusForError(RequestError error) {
       return 400;
     case RequestError::TIMEOUT:
       return 408;
-    case RequestError::METHOD_NOT_ALLOWED:
-      return 405;
+    case RequestError::METHOD_NOT_IMPLEMENTED:
+      return 501;
     case RequestError::EXPECTATION_FAILED:
       return 417;
     case RequestError::LENGTH_REQUIRED:
@@ -416,7 +416,7 @@ private:
       target = _line + prefixLength;
     }
     if (target == nullptr) {
-      reject(RequestError::METHOD_NOT_ALLOWED);
+      reject(RequestError::METHOD_NOT_IMPLEMENTED);
       return;
     }
     if (_lineLength <= prefixLength + suffixLength ||
