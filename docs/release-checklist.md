@@ -34,7 +34,10 @@ not approval for deployment.
   HBP-9030 HIL record, including failed-update rollback and a 24-hour soak.
 - Browser automation must use a new evidence directory and one unique
   `BP_BROWSER_RUN_ID`; its runner receives browser path, base URL, output path,
-  run ID, and source SHA. Both JSON reports must bind those run values.
+  run ID, and source SHA. Both JSON reports must bind those run values. A
+  separately controlled harness signs the canonical evidence manifest; its
+  approved public DER hash must be reviewed into
+  `config/evidence-trust-anchors.json` before evidence can pass.
 - Record clinical owner, security reviewer, release approver, date, clinic
   cohort, rollback image, maintenance window, and EOL/support date.
 - Reject the release if the trust anchor is empty, evidence is missing, the

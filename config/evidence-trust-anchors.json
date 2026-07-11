@@ -1,0 +1,5 @@
+{
+  "schema": "bp-evidence-trust-v1",
+  "browser_public_key_der_sha256": "",
+  "hil_public_key_der_sha256": ""
+}

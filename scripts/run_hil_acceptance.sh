@@ -8,6 +8,8 @@ cd "$ROOT"
 : "${BP_HIL_MONITOR_ID:?BP_HIL_MONITOR_ID is required}"
 : "${BP_HIL_LOG_DIR:?BP_HIL_LOG_DIR is required}"
 : "${BP_HIL_SOAK_HOURS:?BP_HIL_SOAK_HOURS is required and must equal 24}"
+: "${BP_HIL_EVIDENCE_PUBLIC_KEY:?BP_HIL_EVIDENCE_PUBLIC_KEY is required}"
+[[ -s "$BP_HIL_EVIDENCE_PUBLIC_KEY" ]] || { echo "HIL evidence public key is unavailable" >&2; exit 2; }
 [[ "$BP_HIL_SOAK_HOURS" == "24" ]] || {
   echo "a complete 24-hour soak is required" >&2
   exit 1
@@ -21,7 +23,8 @@ cd "$ROOT"
 
 for file in \
   corpus-summary.json transport-faults.json network-security.json \
-  signed-update.json rollback.json soak-summary.json operator-approval.json
+  signed-update.json rollback.json soak-summary.json operator-approval.json \
+  raw-logs.sha256 evidence-manifest.txt evidence-attestation.sig.der
 do
   [[ -s "$BP_HIL_LOG_DIR/$file" ]] || {
     echo "missing retained HIL evidence: $file" >&2
@@ -62,5 +65,49 @@ jq -e '.schema == "bp-hil-soak-v1" and .duration_hours >= 24 and
 jq -e '.schema == "bp-hil-approval-v1" and .approved == true and
        (.reviewer | length) > 0 and (.approved_at | length) > 0' \
   "$BP_HIL_LOG_DIR/operator-approval.json" >/dev/null
+
+if ! (cd "$BP_HIL_LOG_DIR" && {
+  if command -v sha256sum >/dev/null; then sha256sum -c raw-logs.sha256;
+  else shasum -a 256 -c raw-logs.sha256; fi
+}) >/dev/null 2>&1; then
+  echo "HIL raw log digest verification failed" >&2
+  exit 1
+fi
+sha256_file() {
+  if command -v sha256sum >/dev/null; then sha256sum "$1" | awk '{print $1}';
+  else shasum -a 256 "$1" | awk '{print $1}'; fi
+}
+sha256_stream() {
+  if command -v sha256sum >/dev/null; then sha256sum | awk '{print $1}';
+  else shasum -a 256 | awk '{print $1}'; fi
+}
+expected_manifest=$(mktemp)
+{
+  printf '%s\n' 'schema=bp-hil-evidence-v1' \
+    "board_id=$BP_HIL_BOARD_ID" "monitor_id=$BP_HIL_MONITOR_ID" \
+    "soak_hours=$BP_HIL_SOAK_HOURS"
+  for file in corpus-summary.json transport-faults.json network-security.json \
+              signed-update.json rollback.json soak-summary.json \
+              operator-approval.json raw-logs.sha256; do
+    printf '%s_sha256=%s\n' "${file//[-.]/_}" "$(sha256_file "$BP_HIL_LOG_DIR/$file")"
+  done
+} > "$expected_manifest"
+if ! cmp -s "$expected_manifest" "$BP_HIL_LOG_DIR/evidence-manifest.txt"; then
+  rm -f "$expected_manifest"
+  echo "HIL evidence manifest binding failed" >&2
+  exit 1
+fi
+rm -f "$expected_manifest"
+expected_key_sha=$(jq -r '.hil_public_key_der_sha256' config/evidence-trust-anchors.json)
+actual_key_sha=$(openssl pkey -pubin -in "$BP_HIL_EVIDENCE_PUBLIC_KEY" \
+  -outform DER 2>/dev/null | sha256_stream)
+[[ "$expected_key_sha" =~ ^[0-9a-f]{64}$ && "$actual_key_sha" == "$expected_key_sha" ]] || {
+  echo "HIL evidence trust anchor is not configured or mismatched" >&2; exit 1;
+}
+openssl dgst -sha256 -verify "$BP_HIL_EVIDENCE_PUBLIC_KEY" \
+  -signature "$BP_HIL_LOG_DIR/evidence-attestation.sig.der" \
+  "$BP_HIL_LOG_DIR/evidence-manifest.txt" >/dev/null || {
+    echo "HIL evidence attestation failed" >&2; exit 1;
+  }
 
 echo "HIL acceptance and 24-hour soak evidence passed: $BP_HIL_LOG_DIR"

@@ -253,6 +253,22 @@ sign_candidate() {
     exit 1
   fi
 
+  local source_bundle signed_bundle signing_dir approved_manifest_sha
+  source_bundle=$bundle
+  signed_bundle="${source_bundle}-signed"
+  [[ ! -e "$signed_bundle" ]] || {
+    echo "signed bundle already exists: $signed_bundle" >&2; exit 1;
+  }
+  approved_manifest_sha=$(sha256_file "$source_bundle/manifest.txt")
+  signing_dir=$(mktemp -d "$release_root/.signing.XXXXXX")
+  chmod 700 "$signing_dir"
+  trap 'rm -rf "$signing_dir"' EXIT
+  for file in checksums.sha256 compile.log firmware.bin manifest.txt \
+              release-public-key.der release.json sbom.json; do
+    cp "$source_bundle/$file" "$signing_dir/$file"
+  done
+  bundle=$signing_dir
+
   "$BP_RELEASE_SIGN_COMMAND" "$bundle/manifest.txt" "$bundle/manifest.sig.der"
   local signature_size
   signature_size=$(wc -c < "$bundle/manifest.sig.der" | tr -d ' ')
@@ -269,12 +285,35 @@ sign_candidate() {
     -signature "$bundle/manifest.sig.der" "$bundle/manifest.txt" >/dev/null
   base64 < "$bundle/manifest.sig.der" | tr -d '\r\n' \
     > "$bundle/manifest.sig.b64"
+  if [[ "$(sha256_file "$bundle/manifest.txt")" != "$approved_manifest_sha" ]] ||
+     [[ "$(sha256_file "$bundle/firmware.bin")" != "$artifact_sha" ]] ||
+     [[ "$(wc -c < "$bundle/firmware.bin" | tr -d ' ')" != "$artifact_size" ]] ||
+     [[ "$(xxd -p -c 1000 "$bundle/release-public-key.der" | tr -d '\r\n')" != "$anchor_hex" ]]; then
+    echo "private signing snapshot changed during signing" >&2
+    exit 1
+  fi
   local tmp
   tmp=$(mktemp)
   jq '.status = "signed"' "$bundle/release.json" > "$tmp"
   mv "$tmp" "$bundle/release.json"
   refresh_checksums "$bundle"
-  echo "$bundle"
+  if ! (
+    cd "$bundle"
+    if command -v sha256sum >/dev/null; then
+      sha256sum -c checksums.sha256
+    else
+      shasum -a 256 -c checksums.sha256
+    fi
+  ) >/dev/null 2>&1 ||
+     ! openssl dgst -sha256 -verify "$bundle/release-public-key.pem" \
+       -signature "$bundle/manifest.sig.der" "$bundle/manifest.txt" >/dev/null; then
+    echo "signed snapshot final verification failed" >&2
+    exit 1
+  fi
+  mv "$bundle" "$signed_bundle"
+  trap - EXIT
+  chmod -R a-w "$signed_bundle"
+  echo "$signed_bundle"
 }
 
 case ${1:-} in

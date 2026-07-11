@@ -14,12 +14,16 @@ Before claiming PASS, copy or securely archive these machine-readable files:
   reset/watchdog reason, throughput, loss/reconnect counters, and record order /
   checksum validation.
 - `operator-approval.json`: named reviewer and timestamp.
+- `raw-logs.sha256`, `evidence-manifest.txt`, and
+  `evidence-attestation.sig.der`: retained raw-log index, canonical summary
+  bindings, and the trusted harness signature.
 
 Validate retained evidence with:
 
 ```bash
 BP_HIL_BOARD_ID=... BP_HIL_MONITOR_ID=... \
 BP_HIL_LOG_DIR=/secure/evidence/run-... BP_HIL_SOAK_HOURS=24 \
+BP_HIL_EVIDENCE_PUBLIC_KEY=/secure/approved-harness-public.pem \
 bash scripts/run_hil_acceptance.sh
 ```
 
@@ -32,3 +36,8 @@ recovery, and an all-passing `faults` array. `network-security.json` uses
 `bp-hil-network-v1` and must bind the board ID plus AP shutdown, physical
 recovery, expiry, old-credential rejection, SDK erase, isolated VLAN, and the
 documented HTTP residual-risk acceptance.
+
+The HIL harness signing key must be separated from the person preparing JSON
+summaries. Review its public DER SHA-256 into
+`config/evidence-trust-anchors.json`; an empty or mismatched anchor fails. This
+attestation does not replace independent review of raw logs and hardware IDs.
