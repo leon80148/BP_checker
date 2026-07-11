@@ -208,3 +208,19 @@ The candidate manifest/SBOM record the exact anchor hash. A temporary P-256
 fixture key exercised the external signer; OpenSSL returned `Verified OK` and
 all bundle checksums passed. The private fixture key was removed from `/tmp`
 and never entered source, build output, or command output.
+
+Review then demonstrated that mutable candidate files could be changed before
+or during signing, and that browser/HIL JSON could self-declare success. The
+release contract was extended first and exited 1 on the missing path,
+checksums, cross-binding, fixed-file, and approval-digest guards.
+
+At `f420f99`, a clean anchored candidate emitted out-of-band digest
+`a512db1a8cd6ba12e79f85dc2eacdc24d58e0cb818879f70853efab1a0ab7d3e`.
+Signing validated it, copied only approved files to a private snapshot, and
+produced a separate read-only `-signed` bundle while the source remained
+unsigned. Final checksums and OpenSSL verification passed. The 1,157,344-byte
+artifact SHA-256 is
+`699144adc4449daf6ca7283f953f8b34b8a2248081bec41d65d0f8be495002f3`.
+Browser/HIL PASS now additionally requires a canonical raw-evidence manifest
+and detached signature whose public DER hash is pinned by reviewed config. The
+repository defaults are empty, so no unattested software-only evidence passes.
