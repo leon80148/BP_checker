@@ -305,11 +305,96 @@ static void testOutstandingOfferIsIdempotentUntilAck() {
            "idempotent offer completes without abort");
 }
 
+static bool validateEnvelope(const std::string& wire) {
+  BoundedHttpResponse response;
+  response.begin();
+  (void)response.append(
+    reinterpret_cast<const uint8_t*>(wire.data()), wire.size());
+  return response.validHttp1Envelope();
+}
+
+static void testHttpEnvelopeValidationFailsClosed() {
+  const std::string valid =
+    "HTTP/1.1 200 OK\r\n"
+    "Content-Type: text/plain; charset=UTF-8\r\n"
+    "Content-Length: 2\r\n"
+    "Cache-Control: no-store, max-age=0\r\n"
+    "Pragma: no-cache\r\n"
+    "X-Content-Type-Options: nosniff\r\n"
+    "Connection: close\r\n"
+    "\r\n"
+    "OK";
+  CHECK_TRUE(validateEnvelope(valid),
+             "complete bounded HTTP/1.1 response envelope is accepted");
+
+  std::string missingNoStore = valid;
+  const std::string cacheLine =
+    "Cache-Control: no-store, max-age=0\r\n";
+  missingNoStore.erase(missingNoStore.find(cacheLine), cacheLine.size());
+  CHECK_TRUE(!validateEnvelope(missingNoStore),
+             "missing mandatory no-store header is rejected");
+
+  std::string duplicateLength = valid;
+  duplicateLength.insert(duplicateLength.find("Content-Length:"),
+                         "Content-Length: 2\r\n");
+  CHECK_TRUE(!validateEnvelope(duplicateLength),
+             "duplicate Content-Length is rejected");
+
+  std::string wrongLength = valid;
+  wrongLength.replace(wrongLength.find("Content-Length: 2"),
+                      std::strlen("Content-Length: 2"),
+                      "Content-Length: 3");
+  CHECK_TRUE(!validateEnvelope(wrongLength),
+             "body length mismatch is rejected");
+
+  std::string chunked = valid;
+  chunked.insert(chunked.find("Connection:"),
+                 "Transfer-Encoding: chunked\r\n");
+  CHECK_TRUE(!validateEnvelope(chunked),
+             "capture-bypassing transfer encoding is rejected");
+
+  std::string missingConnection = valid;
+  const std::string connectionLine = "Connection: close\r\n";
+  missingConnection.erase(missingConnection.find(connectionLine),
+                          connectionLine.size());
+  CHECK_TRUE(!validateEnvelope(missingConnection),
+             "missing close contract is rejected");
+
+  std::string truncated = valid;
+  truncated.erase(truncated.find("\r\n\r\n") + 2);
+  CHECK_TRUE(!validateEnvelope(truncated),
+             "truncated header terminator is rejected");
+
+  std::string malformedStatus = valid;
+  malformedStatus.replace(9, 3, "2O0");
+  CHECK_TRUE(!validateEnvelope(malformedStatus),
+             "malformed status code is rejected");
+
+  BoundedHttpResponse noAlloc;
+  noAlloc.begin();
+  (void)noAlloc.append(reinterpret_cast<const uint8_t*>(valid.data()),
+                       valid.size());
+  bool threw = false;
+  gDeniedAllocationCalls = 0;
+  gDenyAllocations = true;
+  try {
+    CHECK_TRUE(noAlloc.validHttp1Envelope(),
+               "envelope validation succeeds with allocation denied");
+  } catch (const std::bad_alloc&) {
+    threw = true;
+  }
+  gDenyAllocations = false;
+  CHECK_TRUE(!threw, "envelope validation never allocates");
+  CHECK_EQ(gDeniedAllocationCalls, 0UL,
+           "envelope validation makes no allocation attempt");
+}
+
 int main() {
   testTransactionalResponseSupportsPartialSends();
   testOverflowAtomicallyBecomesFixed503();
   testSlowReaderDeadlineAndFailureCleanup();
   testCapacityWipeAndAllocationContract();
   testOutstandingOfferIsIdempotentUntilAck();
+  testHttpEnvelopeValidationFailsClosed();
   return testReport();
 }

@@ -76,7 +76,7 @@ public:
   BoundedFormValidator(const BoundedFormValidator&) = delete;
   BoundedFormValidator& operator=(const BoundedFormValidator&) = delete;
 
-  ~BoundedFormValidator() { reset(); }
+  ~BoundedFormValidator() { clear(); }
 
   bool validate(const char* query, size_t queryLength,
                 const char* body, size_t bodyLength) {
@@ -92,10 +92,25 @@ public:
   }
 
   size_t fieldCount() const { return _fieldCount; }
+  const char* key(size_t index) const {
+    return index < _fieldCount ? _keys[index] : "";
+  }
+  const char* value(size_t index) const {
+    return index < _fieldCount ? _values[index] : "";
+  }
+  size_t keyLength(size_t index) const {
+    return index < _fieldCount ? _keyLengths[index] : 0;
+  }
+  size_t valueLength(size_t index) const {
+    return index < _fieldCount ? _valueLengths[index] : 0;
+  }
+  void clear() { reset(); }
 
 private:
   char _keys[kMaxFields][kMaxKeyChars + 1] = {};
+  char _values[kMaxFields][kMaxValueBytes + 1] = {};
   size_t _keyLengths[kMaxFields] = {};
+  size_t _valueLengths[kMaxFields] = {};
   size_t _fieldCount = 0;
 
   static void secureZero(void* target, size_t length) {
@@ -105,7 +120,9 @@ private:
 
   void reset() {
     secureZero(_keys, sizeof(_keys));
+    secureZero(_values, sizeof(_values));
     secureZero(_keyLengths, sizeof(_keyLengths));
+    secureZero(_valueLengths, sizeof(_valueLengths));
     _fieldCount = 0;
   }
 
@@ -174,17 +191,22 @@ private:
     return decodedLength != 0;
   }
 
-  static bool validateValue(const char* encoded, size_t length) {
-    size_t decodedLength = 0;
+  static bool decodeValue(const char* encoded, size_t length,
+                          char decoded[kMaxValueBytes + 1],
+                          size_t& decodedLength) {
+    decodedLength = 0;
     size_t offset = 0;
     while (offset < length) {
       uint8_t value = 0;
       if (!nextDecodedByte(encoded, length, offset, value, false) ||
           decodedLength >= kMaxValueBytes) {
+        secureZero(decoded, kMaxValueBytes + 1);
+        decodedLength = 0;
         return false;
       }
-      ++decodedLength;
+      decoded[decodedLength++] = static_cast<char>(value);
     }
+    decoded[decodedLength] = '\0';
     return true;
   }
 
@@ -221,19 +243,25 @@ private:
       }
 
       char key[kMaxKeyChars + 1] = {};
+      char value[kMaxValueBytes + 1] = {};
       size_t keyLength = 0;
+      size_t valueLength = 0;
       if (!decodeKey(encoded + fieldStart, equals - fieldStart,
                      key, keyLength) ||
-          !validateValue(encoded + equals + 1,
-                         fieldEnd - equals - 1) ||
+          !decodeValue(encoded + equals + 1,
+                       fieldEnd - equals - 1, value, valueLength) ||
           duplicateKey(key, keyLength)) {
         secureZero(key, sizeof(key));
+        secureZero(value, sizeof(value));
         return false;
       }
       std::memcpy(_keys[_fieldCount], key, keyLength + 1);
+      std::memcpy(_values[_fieldCount], value, valueLength + 1);
       _keyLengths[_fieldCount] = keyLength;
+      _valueLengths[_fieldCount] = valueLength;
       ++_fieldCount;
       secureZero(key, sizeof(key));
+      secureZero(value, sizeof(value));
 
       if (fieldEnd == length) break;
       fieldStart = fieldEnd + 1;

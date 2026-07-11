@@ -122,6 +122,20 @@ static void testStrictFormValidationAndParameterPollution() {
              "valid query and form body pass strict decoding");
   CHECK_EQ(validator.fieldCount(), 4UL,
            "combined query/body field count is explicit");
+  CHECK_STR(validator.key(0), "rescan",
+            "validated query key is available for bounded materialization");
+  CHECK_STR(validator.value(0), "1",
+            "validated query value is decoded exactly");
+  CHECK_STR(validator.key(2), "manual_ssid",
+            "form key order is preserved after query fields");
+  CHECK_STR(validator.value(2), "Clinic West",
+            "plus decodes to space for handler materialization");
+  CHECK_STR(validator.value(3), "p@ss",
+            "percent escapes decode once for handler materialization");
+  CHECK_EQ(validator.keyLength(2), std::strlen("manual_ssid"),
+           "decoded key length is explicit");
+  CHECK_EQ(validator.valueLength(3), std::strlen("p@ss"),
+           "decoded value length is explicit");
   CHECK_TRUE(validateBody(validator, "password="),
              "empty form value remains valid");
   CHECK_TRUE(validateBody(validator, "ssid=%E4%B8%AD"),
@@ -152,6 +166,8 @@ static void testStrictFormValidationAndParameterPollution() {
              "decoded punctuation in key is rejected");
   CHECK_EQ(validator.fieldCount(), 0UL,
            "failed validation exposes no stale field metadata");
+  CHECK_STR(validator.value(0), "",
+            "failed validation wipes prior decoded values");
 }
 
 static void testFormCapsAndAllocationContract() {
@@ -198,6 +214,16 @@ static void testFormCapsAndAllocationContract() {
   CHECK_TRUE(!threw, "web input boundary works with allocation denied");
   CHECK_EQ(gDeniedAllocationCalls, 0UL,
            "web input boundary performs no allocation attempt");
+
+  CHECK_TRUE(validator.validate(nullptr, 0, "password=secret42", 17),
+             "clear fixture validates sensitive value");
+  CHECK_TRUE(objectContains(&validator, sizeof(validator), "secret42"),
+             "decoded sensitive value exists before explicit clear");
+  validator.clear();
+  CHECK_EQ(validator.fieldCount(), 0UL,
+           "explicit validator clear removes field metadata");
+  CHECK_TRUE(!objectContains(&validator, sizeof(validator), "secret42"),
+             "explicit validator clear wipes decoded values");
 
   uint32_t random = 0x9e3779b9U;
   char fuzz[65] = {};

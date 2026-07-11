@@ -128,12 +128,20 @@ static void testAllowedBodyAndCapturedResponseLifecycle() {
   CHECK_TRUE(transaction.beginDispatch(202),
              "dispatch begins one transactional response");
   static const char response[] =
-    "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK";
+    "HTTP/1.1 200 OK\r\n"
+    "Content-Type: text/plain\r\n"
+    "Content-Length: 2\r\n"
+    "Cache-Control: no-store, max-age=0\r\n"
+    "Pragma: no-cache\r\n"
+    "X-Content-Type-Options: nosniff\r\n"
+    "Connection: close\r\n\r\nOK";
   CHECK_EQ(transaction.capture(
              reinterpret_cast<const uint8_t*>(response),
              sizeof(response) - 1),
            sizeof(response) - 1,
            "handler response is captured before socket output");
+  CHECK_TRUE(transaction.capturedResponseIsValidHttp1(),
+             "adapter can validate the captured response before publish");
   CHECK_TRUE(transaction.finishDispatch(203),
              "complete captured response enters send phase");
   CHECK_STR(transaction.request().view().authorization, "",
@@ -447,6 +455,50 @@ static void testHandoffDeadlinesStreamAndMethodMetadata() {
   const std::string unsupportedResponse = drain(unsupportedMethod);
   CHECK_TRUE(unsupportedResponse.find("Allow:") == std::string::npos,
              "unsupported method never fabricates target Allow metadata");
+
+  BoundedHttpTransaction invalidForm;
+  invalidForm.begin(1100);
+  (void)feedUntilBoundary(invalidForm, authenticatedGet, 1100);
+  CHECK_TRUE(invalidForm.acceptPolicy(BodyMode::NONE, 0, 1101),
+             "pre-dispatch rejection fixture accepts policy");
+  CHECK_TRUE(invalidForm.rejectDispatch(400, 1102),
+             "validated-input failure queues bounded rejection");
+  CHECK_EQ(invalidForm.queuedStatus(), 400,
+           "pre-dispatch rejection preserves selected status");
+  CHECK_STR(invalidForm.request().view().authorization, "",
+            "pre-dispatch rejection wipes authorization");
+
+  BoundedHttpTransaction lateInputValidation;
+  lateInputValidation.begin(1200);
+  (void)feedUntilBoundary(lateInputValidation, get, 1200);
+  CHECK_TRUE(lateInputValidation.acceptPolicy(BodyMode::NONE, 0, 1201),
+             "late validation fixture accepts policy");
+  CHECK_TRUE(lateInputValidation.rejectDispatch(
+               400, 1201 + BoundedHttpTransaction::kHandoffDeadlineMs),
+             "late input validation still queues bounded response");
+  CHECK_EQ(lateInputValidation.queuedStatus(), 503,
+           "late pre-dispatch rejection cannot bypass handoff deadline");
+
+  BoundedHttpTransaction allocationFailure;
+  allocationFailure.begin(1300);
+  (void)feedUntilBoundary(allocationFailure, authenticatedGet, 1300);
+  CHECK_TRUE(allocationFailure.acceptPolicy(BodyMode::NONE, 0, 1301),
+             "allocation-failure fixture accepts policy");
+  CHECK_TRUE(allocationFailure.beginDispatch(1302),
+             "allocation-failure fixture begins capture");
+  (void)allocationFailure.capture(
+    reinterpret_cast<const uint8_t*>(partialSecret),
+    sizeof(partialSecret) - 1);
+  CHECK_TRUE(allocationFailure.rejectCapture(503, 1303),
+             "handler allocation failure substitutes bounded response");
+  CHECK_EQ(allocationFailure.queuedStatus(), 503,
+           "capture rejection records service-unavailable outcome");
+  const std::string allocationResponse = drain(allocationFailure);
+  CHECK_TRUE(allocationResponse.find(
+               "HTTP/1.1 503 Service Unavailable\r\n") == 0,
+             "handler allocation failure emits deterministic status");
+  CHECK_TRUE(allocationResponse.find(partialSecret) == std::string::npos,
+             "handler allocation failure never leaks partial output");
 }
 
 int main() {

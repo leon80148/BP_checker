@@ -106,9 +106,26 @@ public:
     return true;
   }
 
+  bool rejectDispatch(int status, uint32_t nowMs) {
+    if (_state != TransactionState::DISPATCH_READY) return false;
+    if (handoffDeadlineElapsed(nowMs)) return queueError(503, nowMs);
+    return queueError(status == 405 ? 500 : status, nowMs);
+  }
+
+  bool rejectCapture(int status, uint32_t nowMs) {
+    if (_state != TransactionState::CAPTURING_RESPONSE) return false;
+    if (handoffDeadlineElapsed(nowMs)) return queueError(503, nowMs);
+    return queueError(status == 405 ? 500 : status, nowMs);
+  }
+
   size_t capture(const uint8_t* data, size_t length) {
     if (_state != TransactionState::CAPTURING_RESPONSE) return 0;
     return _response.append(data, length);
+  }
+
+  bool capturedResponseIsValidHttp1() const {
+    return _state == TransactionState::CAPTURING_RESPONSE &&
+           _response.validHttp1Envelope();
   }
 
   bool finishDispatch(uint32_t nowMs) {
