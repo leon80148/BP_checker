@@ -495,9 +495,107 @@ static void testStableErrorClassification() {
            "non-error has no HTTP status");
 }
 
+static bool objectContains(const void* object, size_t objectSize,
+                           const char* needle) {
+  const auto* bytes = static_cast<const uint8_t*>(object);
+  const size_t needleLength = std::strlen(needle);
+  if (needleLength == 0 || needleLength > objectSize) return false;
+  for (size_t offset = 0; offset + needleLength <= objectSize; ++offset) {
+    if (std::memcmp(bytes + offset, needle, needleLength) == 0) return true;
+  }
+  return false;
+}
+
+static void testSensitiveBuffersAreSecurelyCleared() {
+  static_assert(!std::is_trivially_destructible<BoundedHttpRequest>::value,
+                "destructor must wipe credential-bearing fixed buffers");
+  static_assert(!std::is_copy_constructible<BoundedHttpRequest>::value,
+                "request reducer must not copy credential buffers");
+  static_assert(!std::is_copy_assignable<BoundedHttpRequest>::value,
+                "request reducer must not copy-assign credential buffers");
+
+  static const char credential[] = "c3VwZXJzZWNyZXQ=";
+  const std::string authorized =
+    std::string("GET / HTTP/1.1\r\nHost: bp.local\r\nAuthorization: Basic ") +
+    credential + "\r\n\r\n";
+
+  BoundedHttpRequest rejected;
+  rejected.reset(1);
+  feedAll(rejected,
+          std::string("GET / HTTP/1.1\r\nHost: bp.local\r\nAuthorization: Basic ") +
+            credential + "\r\nBroken\r\n\r\n",
+          1);
+  CHECK_EQ(static_cast<int>(rejected.state()),
+           static_cast<int>(RequestState::REJECT),
+           "post-Authorization parse error reaches reject state");
+  CHECK_STR(rejected.view().authorization, "",
+            "reject immediately clears Authorization view");
+  CHECK_TRUE(!objectContains(&rejected, sizeof(rejected), credential),
+             "reject clears Authorization from view and scratch line");
+
+  BoundedHttpRequest reset;
+  reset.reset(2);
+  feedAll(reset, authorized, 2);
+  CHECK_TRUE(objectContains(&reset, sizeof(reset), credential),
+             "fixture stores credential before policy evaluation");
+  reset.reset(3);
+  CHECK_TRUE(!objectContains(&reset, sizeof(reset), credential),
+             "reset securely clears credential-bearing buffers");
+
+  alignas(BoundedHttpRequest) uint8_t storage[sizeof(BoundedHttpRequest)];
+  std::memset(storage, 0xa5, sizeof(storage));
+  auto* placed = ::new (static_cast<void*>(storage)) BoundedHttpRequest();
+  placed->reset(4);
+  feedAll(*placed, authorized, 4);
+  CHECK_TRUE(objectContains(storage, sizeof(storage), credential),
+             "placement fixture contains credential before destruction");
+  placed->~BoundedHttpRequest();
+  CHECK_TRUE(!objectContains(storage, sizeof(storage), credential),
+             "destructor clears credential from backing storage");
+}
+
+static void testTerminalStatesIgnoreAllFurtherInput() {
+  BoundedHttpRequest readyForPolicy;
+  readyForPolicy.reset(10);
+  feedAll(readyForPolicy,
+          "GET / HTTP/1.1\r\nHost: bp.local\r\n"
+          "Authorization: Basic YWRtaW46eA==\r\n\r\n",
+          10);
+  CHECK_EQ(static_cast<int>(readyForPolicy.state()),
+           static_cast<int>(RequestState::WAIT_POLICY),
+           "fixture reaches policy terminal state");
+  const ConsumeResult afterPolicy =
+    readyForPolicy.consume(nullptr, 1, 10);
+  CHECK_EQ(afterPolicy.consumed, 0UL,
+           "policy terminal state consumes no invalid follow-up input");
+  CHECK_EQ(static_cast<int>(afterPolicy.state),
+           static_cast<int>(RequestState::WAIT_POLICY),
+           "policy terminal state remains stable");
+  CHECK_EQ(static_cast<int>(readyForPolicy.error()),
+           static_cast<int>(RequestError::NONE),
+           "policy terminal state does not invent an error");
+  CHECK_STR(readyForPolicy.view().authorization, "Basic YWRtaW46eA==",
+            "terminal no-op preserves view for policy evaluation");
+
+  BoundedHttpRequest timedOut;
+  timedOut.reset(100);
+  const uint8_t byte = 'G';
+  (void)timedOut.consume(&byte, 1, 1600);
+  CHECK_EQ(static_cast<int>(timedOut.error()),
+           static_cast<int>(RequestError::TIMEOUT),
+           "fixture reaches timeout terminal state");
+  const ConsumeResult afterReject = timedOut.consume(nullptr, 1, 1600);
+  CHECK_EQ(afterReject.consumed, 0UL,
+           "reject terminal state consumes no invalid follow-up input");
+  CHECK_EQ(static_cast<int>(afterReject.state),
+           static_cast<int>(RequestState::REJECT),
+           "reject terminal state remains stable");
+  CHECK_EQ(static_cast<int>(timedOut.error()),
+           static_cast<int>(RequestError::TIMEOUT),
+           "reject terminal state preserves first failure reason");
+}
+
 static void testNoAllocationAndDeterministicFuzz() {
-  static_assert(std::is_trivially_destructible<BoundedHttpRequest>::value,
-                "request reducer owns no heap resource");
   static_assert(sizeof(BoundedHttpRequest) <= 4096,
                 "request reducer has a bounded stack/static footprint");
 
@@ -564,6 +662,8 @@ int main() {
   testFragmentationBudgetAndStrictCrlf();
   testAbsoluteDeadlineAndClockWrap();
   testStableErrorClassification();
+  testSensitiveBuffersAreSecurelyCleared();
+  testTerminalStatesIgnoreAllFurtherInput();
   testNoAllocationAndDeterministicFuzz();
   return testReport();
 }

@@ -88,6 +88,14 @@ public:
 
   BoundedHttpRequest() { reset(0); }
 
+  BoundedHttpRequest(const BoundedHttpRequest&) = delete;
+  BoundedHttpRequest& operator=(const BoundedHttpRequest&) = delete;
+
+  ~BoundedHttpRequest() {
+    secureZero(&_view, sizeof(_view));
+    secureZero(_line, sizeof(_line));
+  }
+
   void reset(uint32_t nowMs) {
     _startedAt = nowMs;
     _state = RequestState::REQUEST_LINE;
@@ -102,14 +110,18 @@ public:
     _contentTypeSeen = false;
     _headerBytes = 0;
     _headerCount = 0;
-    std::memset(_line, 0, sizeof(_line));
-    std::memset(&_view, 0, sizeof(_view));
+    secureZero(_line, sizeof(_line));
+    secureZero(&_view, sizeof(_view));
     _view.method = RequestMethod::GET;
   }
 
   ConsumeResult consume(const uint8_t* data, size_t length, uint32_t nowMs,
                         size_t budget = kByteBudget) {
     size_t consumed = 0;
+    if (_state == RequestState::WAIT_POLICY ||
+        _state == RequestState::REJECT) {
+      return {0, _state};
+    }
     if ((_state == RequestState::REQUEST_LINE ||
          _state == RequestState::HEADERS) &&
         static_cast<uint32_t>(nowMs - _startedAt) >= kHeaderDeadlineMs) {
@@ -141,7 +153,9 @@ public:
         }
         _sawCarriageReturn = false;
         _line[_lineLength] = '\0';
+        const size_t completedLength = _lineLength;
         finishLine();
+        secureZero(_line, completedLength + 1);
         _lineLength = 0;
         continue;
       }
@@ -190,6 +204,15 @@ private:
   void reject(RequestError error) {
     _error = error;
     _state = RequestState::REJECT;
+    secureZero(&_view, sizeof(_view));
+    secureZero(_line, sizeof(_line));
+    _lineLength = 0;
+    _sawCarriageReturn = false;
+  }
+
+  static void secureZero(void* target, size_t length) {
+    volatile uint8_t* bytes = static_cast<volatile uint8_t*>(target);
+    while (length-- != 0) *bytes++ = 0;
   }
 
   void finishLine() {
