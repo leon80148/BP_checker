@@ -99,43 +99,47 @@ static void testAuthorizationFailsClosed() {
   const uint8_t signature[] = {0x30, 0x01, 0x7f};
   VerifyFixture fixture{true, wire};
   SignatureVerifier verifier{&fixture, verifySignature, true};
-  Manifest parsed{};
+  AuthorizedManifest authorized{};
   CHECK_EQ(code(authorizeManifest(
              wire.data(), wire.size(), signature, sizeof(signature),
-             "esp32:esp32:esp32s3", 5, verifier, parsed)),
+             "esp32:esp32:esp32s3", 5, verifier, authorized)),
            code(Result::OK), "trusted signature authorizes compatible release");
+  CHECK_TRUE(authorized.valid() && authorized.manifest().sequence == 7,
+             "successful verification creates an authorized manifest type");
   CHECK_EQ(code(authorizeManifest(
              wire.data(), wire.size(), signature, sizeof(signature),
-             "esp32:esp32:esp32", 5, verifier, parsed)),
+             "esp32:esp32:esp32", 5, verifier, authorized)),
            code(Result::WRONG_TARGET), "wrong board target rejects");
+  CHECK_TRUE(!authorized.valid(), "failed target check clears authorization");
   CHECK_EQ(code(authorizeManifest(
              wire.data(), wire.size(), signature, sizeof(signature),
-             "esp32:esp32:esp32s3", 7, verifier, parsed)),
+             "esp32:esp32:esp32s3", 7, verifier, authorized)),
            code(Result::INCOMPATIBLE_SEQUENCE), "replay sequence rejects");
   CHECK_EQ(code(authorizeManifest(
              wire.data(), wire.size(), signature, sizeof(signature),
-             "esp32:esp32:esp32s3", 8, verifier, parsed)),
+             "esp32:esp32:esp32s3", 8, verifier, authorized)),
            code(Result::INCOMPATIBLE_SEQUENCE), "downgrade sequence rejects");
   const std::string requiresIntermediate = manifest(9, 8);
   fixture.expectedManifest = requiresIntermediate;
   CHECK_EQ(code(authorizeManifest(
              requiresIntermediate.data(), requiresIntermediate.size(),
              signature, sizeof(signature), "esp32:esp32:esp32s3", 5,
-             verifier, parsed)),
+             verifier, authorized)),
            code(Result::INCOMPATIBLE_SEQUENCE),
            "unmet minimum installed sequence rejects");
   fixture.expectedManifest = wire;
   fixture.accept = false;
   CHECK_EQ(code(authorizeManifest(
              wire.data(), wire.size(), signature, sizeof(signature),
-             "esp32:esp32:esp32s3", 5, verifier, parsed)),
+             "esp32:esp32:esp32s3", 5, verifier, authorized)),
            code(Result::SIGNATURE_INVALID), "wrong key or signature rejects");
   SignatureVerifier missing{};
   CHECK_EQ(code(authorizeManifest(
              wire.data(), wire.size(), signature, sizeof(signature),
-             "esp32:esp32:esp32s3", 5, missing, parsed)),
+             "esp32:esp32:esp32s3", 5, missing, authorized)),
            code(Result::SIGNATURE_UNAVAILABLE),
            "missing production trust anchor locks updates");
+  CHECK_TRUE(!authorized.valid(), "missing trust leaves no streamable manifest");
 }
 
 struct ArtifactFixture {
@@ -174,11 +178,19 @@ static ArtifactCallbacks callbacks(ArtifactFixture& fixture) {
   return {&fixture, artifactBegin, artifactWrite, artifactFinish, artifactAbort};
 }
 
-static Manifest parsedManifest(uint32_t size = 4) {
-  Manifest result{};
-  const std::string wire = manifest(7, 5, size);
-  CHECK_EQ(code(parseManifest(wire.data(), wire.size(), result)),
-           code(Result::OK), "artifact fixture manifest parses");
+static AuthorizedManifest authorizedManifest(uint64_t sequence = 7,
+                                             uint64_t minimum = 5,
+                                             uint64_t current = 5,
+                                             uint32_t size = 4) {
+  const std::string wire = manifest(sequence, minimum, size);
+  const uint8_t signature[] = {0x30, 0x01, 0x7f};
+  VerifyFixture verifierFixture{true, wire};
+  SignatureVerifier verifier{&verifierFixture, verifySignature, true};
+  AuthorizedManifest result{};
+  CHECK_EQ(code(authorizeManifest(
+             wire.data(), wire.size(), signature, sizeof(signature),
+             "esp32:esp32:esp32s3", current, verifier, result)),
+           code(Result::OK), "artifact fixture is signature-authorized");
   return result;
 }
 
@@ -188,7 +200,7 @@ static void testBoundedArtifactStream() {
     fixture.digest[i] = static_cast<uint8_t>(i);
   }
   ArtifactStreamPolicy stream;
-  Manifest expected = parsedManifest();
+  AuthorizedManifest expected = authorizedManifest();
   CHECK_EQ(code(stream.begin(expected, callbacks(fixture))), code(Result::OK),
            "verified manifest starts fixed-size artifact stream");
   const uint8_t first[] = {1, 2};
@@ -240,6 +252,31 @@ static void testBoundedArtifactStream() {
   CHECK_EQ(code(stream.write(first, sizeof(first))), code(Result::ARTIFACT_WRITE),
            "inactive partition write failure propagates");
   CHECK_TRUE(failedWrite.aborted, "write failure aborts sink");
+
+  ArtifactFixture failedBegin = fixture;
+  failedBegin.beginOk = false;
+  failedBegin.aborted = false;
+  CHECK_EQ(code(stream.begin(expected, callbacks(failedBegin))),
+           code(Result::ARTIFACT_WRITE), "failed OTA begin rejects stream");
+  CHECK_TRUE(failedBegin.aborted,
+             "partially initialized sink is cleaned after failed begin");
+
+  AuthorizedManifest unsignedManifest;
+  CHECK_EQ(code(stream.begin(unsignedManifest, callbacks(failedBegin))),
+           code(Result::SIGNATURE_INVALID),
+           "parsed but unsigned metadata cannot start an artifact stream");
+
+  ArtifactFixture abandoned = fixture;
+  abandoned.aborted = false;
+  {
+    ArtifactStreamPolicy scoped;
+    CHECK_EQ(code(scoped.begin(expected, callbacks(abandoned))), code(Result::OK),
+             "scoped interrupted stream starts");
+    CHECK_EQ(code(scoped.write(first, sizeof(first))), code(Result::OK),
+             "scoped interrupted stream receives a partial chunk");
+  }
+  CHECK_TRUE(abandoned.aborted,
+             "destruction aborts an unfinished inactive-partition stream");
 }
 
 struct SlotStorage {
@@ -339,6 +376,12 @@ static void testCrashConsistentMonotonicSequence() {
   CHECK_EQ(code(corruptStore.load()), code(Result::STORAGE_CORRUPT),
            "two corrupt slots fail closed without reset to zero");
 
+  SlotStorage newestCorrupt = storage;
+  newestCorrupt.slots[1][0] ^= 0xffU;
+  MonotonicSequenceStore newestCorruptStore(sequenceStorage(newestCorrupt));
+  CHECK_EQ(code(newestCorruptStore.load()), code(Result::STORAGE_CORRUPT),
+           "present corrupt slot cannot roll anti-replay back to older slot");
+
   SlotStorage rollbackImage;
   encodeSequenceSlot(SequenceSlot{8, 10}, rollbackImage.slots[0].data());
   encodeSequenceSlot(SequenceSlot{9, 9}, rollbackImage.slots[1].data());
@@ -367,7 +410,8 @@ static void testPendingBootHealthConfirmation() {
   MonotonicSequenceStore store(sequenceStorage(storage));
   CHECK_EQ(code(store.initialize(5)), code(Result::OK), "boot fixture initializes");
   PendingBootPolicy pending(&store);
-  CHECK_EQ(code(pending.beginPending(7)), code(Result::OK),
+  const AuthorizedManifest release7 = authorizedManifest(7, 5, 5);
+  CHECK_EQ(code(pending.beginPending(release7)), code(Result::OK),
            "verified candidate enters pending-health state");
   bool confirm = true;
   CHECK_EQ(code(pending.evaluate({true, false, true}, &confirm, confirmBoot)),
@@ -380,7 +424,7 @@ static void testPendingBootHealthConfirmation() {
            "unconfirmed image does not advance accepted sequence");
 
   PendingBootPolicy healthy(&store);
-  CHECK_EQ(code(healthy.beginPending(7)), code(Result::OK),
+  CHECK_EQ(code(healthy.beginPending(release7)), code(Result::OK),
            "healthy candidate enters pending state");
   CHECK_EQ(code(healthy.evaluate({true, true, true}, &confirm, confirmBoot)),
            code(Result::OK), "all storage transport and Web checks confirm boot");
@@ -390,7 +434,8 @@ static void testPendingBootHealthConfirmation() {
            "sequence advances before successful boot confirmation");
 
   PendingBootPolicy confirmFailure(&store);
-  CHECK_EQ(code(confirmFailure.beginPending(9)), code(Result::OK),
+  const AuthorizedManifest release9 = authorizedManifest(9, 7, 7);
+  CHECK_EQ(code(confirmFailure.beginPending(release9)), code(Result::OK),
            "confirmation-failure candidate begins");
   confirm = false;
   CHECK_EQ(code(confirmFailure.evaluate({true, true, true}, &confirm, confirmBoot)),
@@ -401,6 +446,20 @@ static void testPendingBootHealthConfirmation() {
            "failed platform confirmation is never reported healthy");
   CHECK_EQ(store.sequence(), 9ULL,
            "anti-replay sequence remains monotonic after confirm boundary cut");
+
+  PendingBootPolicy unsignedPending(&store);
+  AuthorizedManifest unsignedManifest;
+  CHECK_EQ(code(unsignedPending.beginPending(unsignedManifest)),
+           code(Result::INCOMPATIBLE_SEQUENCE),
+           "unsigned metadata cannot enter pending boot state");
+
+  const AuthorizedManifest staleAuthorization = authorizedManifest(11, 9, 9);
+  CHECK_EQ(code(store.advance(10)), code(Result::OK),
+           "concurrent accepted release advances anti-replay state");
+  PendingBootPolicy stalePending(&store);
+  CHECK_EQ(code(stalePending.beginPending(staleAuthorization)),
+           code(Result::INCOMPATIBLE_SEQUENCE),
+           "authorization bound to an older sequence cannot be reused");
 }
 
 int main() {

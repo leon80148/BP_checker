@@ -44,6 +44,33 @@ struct Manifest {
   char artifactSha256[kSha256Capacity] = {};
 };
 
+struct SignatureVerifier;
+
+class AuthorizedManifest {
+public:
+  AuthorizedManifest() = default;
+  const Manifest& manifest() const { return _manifest; }
+  bool valid() const { return _valid; }
+
+private:
+  Manifest _manifest{};
+  uint64_t _authorizedAgainstSequence = 0;
+  bool _valid = false;
+
+  void clear() {
+    memset(&_manifest, 0, sizeof(_manifest));
+    _authorizedAgainstSequence = 0;
+    _valid = false;
+  }
+
+  friend Result authorizeManifest(const char*, size_t, const uint8_t*, size_t,
+                                  const char*, uint64_t,
+                                  const SignatureVerifier&,
+                                  AuthorizedManifest&);
+  friend class ArtifactStreamPolicy;
+  friend class PendingBootPolicy;
+};
+
 inline bool decimalComponent(const char* value, size_t length) {
   if (value == nullptr || length == 0) return false;
   if (length > 1 && value[0] == '0') return false;
@@ -239,7 +266,9 @@ inline Result authorizeManifest(const char* bytes, size_t length,
                                 const char* expectedTarget,
                                 uint64_t highestAcceptedSequence,
                                 const SignatureVerifier& verifier,
-                                Manifest& manifest) {
+                                AuthorizedManifest& authorized) {
+  authorized.clear();
+  Manifest manifest{};
   Result result = parseManifest(bytes, length, manifest);
   if (result != Result::OK) return result;
   if (expectedTarget == nullptr || strcmp(manifest.target, expectedTarget) != 0) {
@@ -258,6 +287,9 @@ inline Result authorizeManifest(const char* bytes, size_t length,
                        signature, signatureLength)) {
     return Result::SIGNATURE_INVALID;
   }
+  authorized._manifest = manifest;
+  authorized._authorizedAgainstSequence = highestAcceptedSequence;
+  authorized._valid = true;
   return Result::OK;
 }
 
@@ -305,8 +337,12 @@ public:
   ArtifactStreamPolicy() = default;
   ArtifactStreamPolicy(const ArtifactStreamPolicy&) = delete;
   ArtifactStreamPolicy& operator=(const ArtifactStreamPolicy&) = delete;
+  ~ArtifactStreamPolicy() { abort(); }
 
-  Result begin(const Manifest& manifest, const ArtifactCallbacks& callbacks) {
+  Result begin(const AuthorizedManifest& authorized,
+               const ArtifactCallbacks& callbacks) {
+    if (!authorized._valid) return Result::SIGNATURE_INVALID;
+    const Manifest& manifest = authorized._manifest;
     if (_active || callbacks.begin == nullptr || callbacks.write == nullptr ||
         callbacks.finish == nullptr || callbacks.abort == nullptr ||
         manifest.artifactSize == 0 ||
@@ -317,6 +353,7 @@ public:
     _expectedSize = manifest.artifactSize;
     _received = 0;
     if (!_callbacks.begin(_callbacks.context, _expectedSize)) {
+      _callbacks.abort(_callbacks.context);
       clear();
       return Result::ARTIFACT_WRITE;
     }
@@ -483,6 +520,9 @@ public:
       valid[i] = present[i] && decodeSequenceSlot(encoded, slots[i]);
     }
     if (!present[0] && !present[1]) return Result::STORAGE_UNINITIALIZED;
+    if ((present[0] && !valid[0]) || (present[1] && !valid[1])) {
+      return Result::STORAGE_CORRUPT;
+    }
     if (!valid[0] && !valid[1]) return Result::STORAGE_CORRUPT;
     if (valid[0] && valid[1] && slots[0].generation == slots[1].generation &&
         slots[0].sequence != slots[1].sequence) {
@@ -576,9 +616,11 @@ public:
   explicit PendingBootPolicy(MonotonicSequenceStore* sequenceStore)
     : _sequenceStore(sequenceStore) {}
 
-  Result beginPending(uint64_t candidateSequence) {
+  Result beginPending(const AuthorizedManifest& authorized) {
+    const uint64_t candidateSequence = authorized._manifest.sequence;
     if (_state != BootState::IDLE || _sequenceStore == nullptr ||
-        !_sequenceStore->ready() ||
+        !authorized._valid || !_sequenceStore->ready() ||
+        authorized._authorizedAgainstSequence != _sequenceStore->sequence() ||
         candidateSequence <= _sequenceStore->sequence()) {
       return Result::INCOMPATIBLE_SEQUENCE;
     }
