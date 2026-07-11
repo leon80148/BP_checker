@@ -86,6 +86,12 @@ runtime contract fails because the bounded server has no stream consumer. At
 `f143a0e`, transaction passes 837 checks, the runtime contract passes, and the
 pinned ESP32-S3 build uses 1,136,064 bytes (86%) with 72,572 bytes globals.
 
+The pending-receipt RED can be replayed by overlaying
+`bf1a110:test/host/test_firmware_update_policy.cpp` onto `e4d1e92`; focused
+compilation fails because the receipt type, fixed size, and codec do not exist.
+At `bf1a110`, normal and ASan/UBSan runs pass 602 checks, including one bit flip
+at every byte offset of the 480-byte receipt.
+
 ## Bounded Binary HTTP Stream
 
 The production commit is `da220d1`. Its parent, `f43c855`, still rejects every
