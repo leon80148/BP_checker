@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-07-11
+
+### Clinic-readiness hardening
+
+- Replaced permissive monitor parsing with the bounded HBP-9030 format-5
+  protocol, explicit quality/movement/error state, device timestamps, strict
+  resynchronization, and de-identified records.
+- Added crash-consistent history/security/policy storage, per-device claim and
+  recovery credentials, centralized role/Host/CSRF/request bounds, and a
+  bounded custom Web runtime.
+- Made USB CDC ownership and lifecycle race-safe with stress/TSan coverage;
+  added explicit freshness, operations counters, safe clinical copy, and
+  whole-dashboard revision updates.
+- Added signed P-256 firmware authorization, bounded OTA streaming,
+  anti-replay state, pending-image health confirmation/rollback, reproducible
+  candidate packaging, SBOM/trust-anchor binding, and fail-closed browser/HIL
+  evidence validators. Hardware acceptance and the 24-hour soak remain pending.
+
 ## 2026-07-03
 
 ### 功能
