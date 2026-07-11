@@ -45,10 +45,16 @@
 
 ### 第一次開機
 
-1. 幫板子上電。
-2. 用手機或電腦連上 Wi-Fi：`ESP32_BP_checker`。
-3. 打開 `http://192.168.4.1`。
-4. 如果需要，先設定要連接的現場 Wi-Fi。
+1. 幫板子上電，並以實體 serial console 讀取一次性的
+   `commissioning_ap_password` 與 `commissioning_bootstrap_token`。
+2. 用手機或電腦以該 AP 密碼連上 `ESP32_BP_checker`。
+3. 打開 `http://192.168.4.1/claim`，輸入一次性啟用碼。
+4. 立即將畫面顯示的 `admin`、`staff` 與復原 AP 密碼存入診所核准的密碼管理器。
+5. 以 `admin` 登入 `/security`，輪替並離線保存「實體復原碼」。
+6. 進入 `/config`，設定隔離的診所 Wi-Fi。
+
+完成設定並重啟後，裝置只使用 STA 模式；Wi-Fi 暫時斷線不會自動重開 AP。
+需要復原時，在裝置旁長按 Reset 3 秒，才會開啟最多 10 分鐘的復原 AP。
 
 成功判定：
 
@@ -91,7 +97,19 @@
 打開 `/bp_model`，目前提供：
 
 - `OMRON-HBP9030`
-- `CUSTOM`
+
+正式版只接受 HBP-9030 的 USB 輸出格式 5。其他型號或自訂格式在取得官方
+grammar、resynchronization contract 與實機驗證前，會被拒絕。
+
+## 存取安全與部署邊界
+
+- `staff` 可查看、呼叫 API 與匯出去識別化量測；`admin` 才能變更設定、
+  清除記錄、重設網路或輪替憑證。
+- 所有裝置各自產生 AP、啟用、管理者與工作人員秘密；專案沒有共用預設密碼。
+- Web 介面目前使用 HTTP Basic authentication，不提供傳輸加密。只可部署在
+  WPA2 保護、隔離且受管控的診所網段；同網段管理者仍可看見 HTTP 流量。
+- 韌體禁止保存或輸出 HBP-9030 subject ID。若未來加入可識別病患資料，發布前
+  必須改用 HTTPS 或受信任的 TLS gateway。
 
 ## 開發
 

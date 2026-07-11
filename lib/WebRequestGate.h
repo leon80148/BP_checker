@@ -271,13 +271,6 @@ private:
       result.reason = GateReason::SECURITY_UNAVAILABLE;
       return result;
     }
-    if (security.claimState == DeviceClaimState::CLAIMED &&
-        result.requestInterface == RequestInterface::PROVISIONING_AP) {
-      result.status = 404;
-      result.reason = GateReason::STATE_OR_INTERFACE;
-      return result;
-    }
-
     if (isClaimRoute(*result.route)) {
       const AccessDecision access = authorizeRoute(
         method, request.path, security.claimState, result.requestInterface,

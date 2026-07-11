@@ -1,19 +1,21 @@
 #ifndef WEB_HANDLER_H
 #define WEB_HANDLER_H
 
-#include <WebServer.h>
 #include <Preferences.h>
 #include <ArduinoJson.h>
 #include <WiFi.h>
+#include "BoundedWebServer.h"
 #include "BPRecordManager.h"
 #include "BP_Parser.h"
 #include "CsvExport.h"
-#include "WebSecurity.h"
+#include "DeviceSecurity.h"
+#include "WebAccessPolicy.h"
 
 // 處理網頁請求的類
 class WebHandler {
 private:
-  WebServer* server;
+  bp_web::BoundedWebServer* server;
+  DeviceSecurity* deviceSecurity;
   Preferences* preferences;
   BP_RecordManager* recordManager;
   BP_Parser* bpParser;
@@ -25,9 +27,21 @@ private:
   // 用單層 const char* 即可，省一層 indirection
   const char* hostname;
   const char* ap_ssid;
-  // 管理密碼快取：所有變更都經由本類（/set_pin）或重啟（GPIO 清除），
-  // 快取不會失同步；避免每次頁面渲染/守門都開 NVS
-  String adminPin;
+
+  static void restartDevice(void*) {
+    ESP.restart();
+  }
+
+  static void secureWipeString(String& value) {
+    volatile char* bytes = value.begin();
+    size_t length = value.length();
+    while (length-- != 0) *bytes++ = 0;
+    value = String();
+  }
+
+  static bool securityOperationSucceeded(DeviceSecurityResult result) {
+    return result == DeviceSecurityResult::OK;
+  }
 
   bool isSystolicAbnormal(int value) const {
     return value > 130 || value < 90;
@@ -246,11 +260,14 @@ private:
   }
 
 public:
-  WebHandler(WebServer* server, Preferences* preferences, BP_RecordManager* recordManager,
+  WebHandler(bp_web::BoundedWebServer* server,
+             DeviceSecurity* deviceSecurity,
+             Preferences* preferences, BP_RecordManager* recordManager,
              BP_Parser* bpParser,
              String* bp_model, String* lastData, String* transportName, String* transportStatus,
              const char* hostname, const char* ap_ssid)
     : server(server),
+      deviceSecurity(deviceSecurity),
       preferences(preferences),
       recordManager(recordManager),
       bpParser(bpParser),
@@ -262,14 +279,8 @@ public:
       ap_ssid(ap_ssid) {}
 
   void setupRoutes() {
-    // CSRF 檢查需要的 headers（Host 由 WebServer 內建解析，走 hostHeader()）
-    static const char* kCollectHeaders[] = {"Origin", "Referer"};
-    server->collectHeaders(kCollectHeaders, 2);
-
-    preferences->begin("wifi-config", true);
-    adminPin = preferences->getString("admin_pin", "");
-    preferences->end();
-
+    server->on("/claim", HTTP_GET, [this]() { this->handleClaimPage(); });
+    server->on("/claim", HTTP_POST, [this]() { this->handleClaim(); });
     server->on("/", HTTP_GET, [this]() { this->handleMonitor(); });
     server->on("/config", HTTP_GET, [this]() { this->handleRoot(); });
     server->on("/configure", HTTP_POST, [this]() { this->handleConfigure(); });
@@ -280,8 +291,7 @@ public:
 
     // 添加歷史記錄相關API
     server->on("/history", HTTP_GET, [this]() { this->handleHistory(); });
-    // CSV 匯出：唯讀，信任等級與 /api/history 一致（LAN 上未認證可讀，
-    // 屬既有取捨；含批量量測資料，網路隔離由部署端負責）
+    // CSV 匯出與 /api/history 同為 staff/admin authenticated read。
     server->on("/export.csv", HTTP_GET, [this]() { this->handleExportCsv(); });
     server->on("/api/history", HTTP_GET, [this]() { this->handleHistoryAPI(); });
     server->on("/api/latest", HTTP_GET, [this]() { this->handleLatestAPI(); });
@@ -292,73 +302,224 @@ public:
     server->on("/bp_model", HTTP_GET, [this]() { this->handleBpModelPage(); });
     server->on("/set_bp_model", HTTP_POST, [this]() { this->handleSetBpModel(); });
 
-    // 管理密碼設定
-    server->on("/set_pin", HTTP_POST, [this]() { this->handleSetPin(); });
-
-    server->on("/reset", HTTP_POST, [this]() {
-      if (this->csrfBlocked()) return;
-      if (this->pinBlocked()) return;
-      // 只清 WiFi 相關 keys，保留 bp_model 與 admin_pin（與 UI 標籤一致）
-      preferences->begin("wifi-config", false);
-      preferences->remove("ssid");
-      preferences->remove("password");
-      preferences->end();
-
-      String html = this->buildPageStart("重置完成", "/config", false, "<meta http-equiv='refresh' content='3;url=/'>");
-      html += "<section class='panel danger-zone'>";
-      html += "<h2>WiFi 設定已重置</h2>";
-      html += "<p class='helper-text'>裝置將重新啟動並回到 AP 設定模式，請重新連線設定。</p>";
-      html += "</section>";
-      html += this->buildPageEnd();
-      server->send(200, "text/html; charset=UTF-8", html);
-
-      delay(1000);
-      ESP.restart();
-    });
+    server->on("/security", HTTP_GET,
+               [this]() { this->handleSecurityPage(); });
+    server->on("/rotate_credentials", HTTP_POST,
+               [this]() { this->handleRotateCredentials(); });
+    server->on("/reset", HTTP_POST, [this]() { this->handleReset(); });
   }
 
 private:
-  // 破壞性/設定變更 POST 的 CSRF 守門：跨源（或 Origin:null / 格式錯誤）
-  // 一律 403。純比對邏輯在 WebSecurity.h（host 可測）。
-  // 兩層檢查：(1) Host 必須是裝置自身身分（防 DNS rebinding —— 攻擊者
-  // 網域解析到裝置 IP 時 Origin 與 Host 一致但都不是裝置）；
-  // (2) Origin/Referer 與 Host 同源。
-  bool csrfBlocked() {
-    String staIp;
-    if (WiFi.status() == WL_CONNECTED) staIp = WiFi.localIP().toString();
-    String mdnsName(hostname);
-    mdnsName += ".local";
-    if (!hostIsDevice(server->hostHeader(), WiFi.softAPIP().toString(),
-                      staIp, mdnsName)) {
-      server->send(403, "text/plain; charset=UTF-8", "無效的主機名稱");
-      return true;
-    }
-    if (csrfCheckPasses(server->header("Origin"), server->header("Referer"),
-                        server->hostHeader())) {
-      return false;
-    }
-    server->send(403, "text/plain; charset=UTF-8", "跨來源請求被拒絕");
-    return true;
-  }
-
-  // 管理密碼守門：未設定 PIN 時放行（向後相容）；設定後破壞性/設定變更
-  // POST 必須附正確的 pin 欄位。失敗加短延遲抑制暴力嘗試（不做鎖定計數
-  // 器 —— 會變成 DoS 途徑）。
-  bool pinBlocked() {
-    if (pinCheckPasses(server->arg("pin"), adminPin)) return false;
-    delay(500);
-    server->send(403, "text/plain; charset=UTF-8", "管理密碼錯誤");
-    return true;
-  }
-
-  // 已設定管理密碼時，在受保護表單內渲染 PIN 輸入欄
-  void renderPinField(String& out) const {
-    if (adminPin.length() == 0) return;
-    out += "<label class='field-label'>管理密碼</label>";
-    out += "<input type='password' name='pin' placeholder='輸入管理密碼' autocomplete='current-password' required>";
-  }
-
   // 以下 handle* 都只在 setupRoutes 內以 lambda 連接到 route，無外部 caller。
+  void handleClaimPage() {
+    const bool recovery = deviceSecurity != nullptr &&
+      deviceSecurity->claimState() == DeviceClaimState::CLAIMED &&
+      server->currentRequestInterface() ==
+        bp_web::RequestInterface::RECOVERY_AP;
+    String html;
+    html.reserve(2048);
+    html =
+      "<!DOCTYPE html><html lang='zh-Hant'><head><meta charset='UTF-8'>"
+      "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+      "<title>BP Checker 安全設定</title></head><body><main><h1>";
+    html += recovery ? "復原管理者存取" : "啟用 BP Checker";
+    html += recovery
+      ? "</h1><p>請輸入事先安全保存的實體復原碼；成功後管理者與工作人員密碼都會輪替。</p>"
+      : "</h1><p>請輸入隨裝置交付的一次性啟用碼。此步驟只能在裝置設定熱點上完成。</p>";
+    html +=
+      "<form method='post' action='/claim'>"
+      "<label for='bootstrap-token'>一次性啟用碼</label>"
+      "<input id='bootstrap-token' type='password' name='token' "
+      "autocomplete='one-time-code' required maxlength='22'>"
+      "<button type='submit'>啟用裝置</button></form>"
+      "<p>目前熱點：<strong>";
+    html += htmlEscape(String(ap_ssid));
+    html += "</strong></p></main></body></html>";
+    server->send(200, "text/html; charset=UTF-8", html);
+    secureWipeString(html);
+  }
+
+  void handleClaim() {
+    String token = server->arg("token");
+    const bool onProvisioningAp =
+      server->currentRequestInterface() ==
+        bp_web::RequestInterface::PROVISIONING_AP;
+    const bool onRecoveryAp =
+      server->currentRequestInterface() ==
+        bp_web::RequestInterface::RECOVERY_AP;
+    const bool recovering = deviceSecurity != nullptr &&
+      deviceSecurity->claimState() == DeviceClaimState::CLAIMED;
+    const DeviceSecurityResult result = deviceSecurity == nullptr
+      ? DeviceSecurityResult::INVALID_STATE
+      : recovering
+        ? deviceSecurity->recoverWithBootstrap(token, onRecoveryAp)
+        : deviceSecurity->claimBootstrap(token, onProvisioningAp, false);
+    const bool accepted = securityOperationSucceeded(result);
+    (void)server->recordClaimResult(accepted, millis());
+    secureWipeString(token);
+    if (!accepted) {
+      server->send(result == DeviceSecurityResult::DENIED ? 403 : 503,
+                   "text/plain; charset=UTF-8",
+                   result == DeviceSecurityResult::DENIED
+                     ? "啟用碼錯誤或啟用環境不符"
+                     : "裝置安全狀態未能完成寫入");
+      return;
+    }
+
+    String html;
+    html.reserve(3072);
+    html =
+      "<!DOCTYPE html><html lang='zh-Hant'><head><meta charset='UTF-8'>"
+      "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+      "<title>裝置存取已更新</title></head><body><main><h1>";
+    html += recovering ? "管理者存取已復原" : "裝置已啟用";
+    html += "</h1>"
+      "<p>請立即將下列存取資料存入診所密碼管理器。</p>"
+      "<dl><dt>管理者帳號</dt><dd>admin</dd><dt>管理者密碼</dt><dd><code>";
+    html += deviceSecurity->secret(DeviceSecretKind::ADMIN);
+    html += "</code></dd><dt>工作人員帳號</dt><dd>staff</dd>"
+            "<dt>工作人員密碼</dt><dd><code>";
+    html += deviceSecurity->secret(DeviceSecretKind::STAFF);
+    html += "</code></dd><dt>復原 AP 密碼</dt><dd><code>";
+    html += deviceSecurity->secret(DeviceSecretKind::AP);
+    html += "</code></dd></dl>"
+            "<p><strong>部署前請先建立實體復原碼：</strong>以管理者登入安全設定，輪替並保存「實體復原碼」。每次使用復原碼後都必須再建立一組。</p>"
+            "<p><a href='/config'>使用管理者帳號繼續設定 WiFi</a> · "
+            "<a href='/security'>開啟安全設定</a></p>"
+            "</main></body></html>";
+    server->send(200, "text/html; charset=UTF-8", html);
+    secureWipeString(html);
+  }
+
+  void handleSecurityPage() {
+    if (deviceSecurity == nullptr ||
+        deviceSecurity->availability() != DeviceSecurityAvailability::READY ||
+        deviceSecurity->claimState() != DeviceClaimState::CLAIMED) {
+      server->send(503, "text/plain; charset=UTF-8",
+                   "裝置安全狀態目前不可用");
+      return;
+    }
+    String html = buildPageStart("裝置安全", "/security");
+    html += "<section class='panel form-shell'><h2>存取憑證</h2>";
+    html += "<p class='helper-text'>請保存在診所核准的密碼管理器；Basic 憑證只允許用於隔離的 WPA2 診所網路。</p>";
+    html += "<ul class='status-list'><li><span>管理者帳號</span><strong>admin</strong></li>";
+    html += "<li><span>管理者密碼</span><strong><code>";
+    html += deviceSecurity->secret(DeviceSecretKind::ADMIN);
+    html += "</code></strong></li><li><span>工作人員帳號</span><strong>staff</strong></li>";
+    html += "<li><span>工作人員密碼</span><strong><code>";
+    html += deviceSecurity->secret(DeviceSecretKind::STAFF);
+    html += "</code></strong></li><li><span>復原 AP 密碼</span><strong><code>";
+    html += deviceSecurity->secret(DeviceSecretKind::AP);
+    html += "</code></strong></li><li><span>實體復原碼</span><strong>";
+    if (deviceSecurity->tokenConsumed()) {
+      html += "尚未建立可用復原碼";
+    } else {
+      html += "<code>";
+      html += deviceSecurity->secret(DeviceSecretKind::BOOTSTRAP);
+      html += "</code>";
+    }
+    html += "</strong></li></ul>";
+    if (deviceSecurity->tokenConsumed()) {
+      html += "<p class='helper-text'><strong>部署前請先建立實體復原碼。</strong>下方選擇「實體復原碼」並立即輪替。</p>";
+    } else {
+      html += "<p class='helper-text'>復原碼已啟用；請離線保管。成功復原後必須立即輪替新碼。</p>";
+    }
+    html += "</section>";
+    html += "<section class='panel form-shell'><h2>輪替憑證</h2>";
+    html += "<form method='post' action='/rotate_credentials'>";
+    html += "<label class='field-label' for='credential-kind'>憑證類型</label>";
+    html += "<select id='credential-kind' name='kind'>"
+            "<option value='admin'>管理者</option>"
+            "<option value='staff'>工作人員</option>"
+            "<option value='bootstrap'>實體復原碼</option>"
+            "<option value='ap'>設定熱點密碼</option></select>";
+    html += "<button class='btn' type='submit'>立即輪替</button></form></section>";
+    html += buildPageEnd();
+    server->send(200, "text/html; charset=UTF-8", html);
+    secureWipeString(html);
+  }
+
+  void handleRotateCredentials() {
+    const String kind = server->arg("kind");
+    DeviceSecretKind secretKind = DeviceSecretKind::ADMIN;
+    bool validKind = true;
+    if (kind == "admin") secretKind = DeviceSecretKind::ADMIN;
+    else if (kind == "staff") secretKind = DeviceSecretKind::STAFF;
+    else if (kind == "bootstrap") secretKind = DeviceSecretKind::BOOTSTRAP;
+    else if (kind == "ap") secretKind = DeviceSecretKind::AP;
+    else validKind = false;
+    if (!validKind || deviceSecurity == nullptr) {
+      server->send(400, "text/plain; charset=UTF-8", "無效的憑證類型");
+      return;
+    }
+
+    const DeviceSecurityResult result = deviceSecurity->rotateSecret(secretKind);
+    if (!securityOperationSucceeded(result)) {
+      if (deviceSecurity->availability() ==
+          DeviceSecurityAvailability::REBOOT_REQUIRED) {
+        (void)server->deferAfterResponse(&WebHandler::restartDevice, nullptr);
+      }
+      server->send(503, "text/plain; charset=UTF-8",
+                   "憑證輪替未能確認完成；裝置可能重新啟動以復原");
+      return;
+    }
+
+    const bool restartRequired = bp_web::credentialRotationRequiresRestart(
+      secretKind, server->currentRequestInterface());
+    const bool restartScheduled = !restartRequired ||
+      server->deferAfterResponse(&WebHandler::restartDevice, nullptr);
+
+    String html = buildPageStart("憑證已輪替", "/security");
+    html += "<section class='panel'><h2>新的憑證</h2><p><code>";
+    html += deviceSecurity->secret(secretKind);
+    html += "</code></p><p class='helper-text'>";
+    if (restartRequired && restartScheduled) {
+      html += "AP 密碼已輪替；回應完成後裝置將重新啟動。請安全保存新值，並依實體復原流程重新開啟熱點。";
+    } else if (restartRequired) {
+      html += "AP 密碼已輪替，但無法排程重啟；請安全保存新值並手動重新啟動裝置，舊 AP 密碼才會停止生效。";
+    } else {
+      html += "舊憑證已立即失效；請安全保存新值。";
+    }
+    html += "</p>";
+    html += "<a class='btn' href='/security'>返回安全設定</a></section>";
+    html += buildPageEnd();
+    server->send(restartScheduled ? 200 : 503,
+                 "text/html; charset=UTF-8", html);
+    secureWipeString(html);
+  }
+
+  void handleReset() {
+    if (deviceSecurity == nullptr) {
+      server->send(503, "text/plain; charset=UTF-8",
+                   "裝置安全狀態目前不可用");
+      return;
+    }
+    const DeviceSecurityResult result =
+      deviceSecurity->requestWipe(DeviceWipeKind::NETWORK);
+    if (!securityOperationSucceeded(result)) {
+      if (deviceSecurity->availability() ==
+          DeviceSecurityAvailability::REBOOT_REQUIRED) {
+        (void)server->deferAfterResponse(&WebHandler::restartDevice, nullptr);
+      }
+      server->send(503, "text/plain; charset=UTF-8",
+                   "無法確認網路清除狀態；請依維護流程重新啟動");
+      return;
+    }
+    if (!server->deferAfterResponse(&WebHandler::restartDevice, nullptr)) {
+      server->send(503, "text/plain; charset=UTF-8",
+                   "清除已排程；請手動重新啟動裝置");
+      return;
+    }
+
+    String html = buildPageStart("網路重置已排程", "/config");
+    html += "<section class='panel danger-zone'><h2>網路憑證將在重啟前清除</h2>";
+    html += "<p class='helper-text'>重啟後不會自動開放熱點；請在裝置旁以實體按鍵開啟限時復原模式。</p>";
+    html += "</section>";
+    html += buildPageEnd();
+    server->send(200, "text/html; charset=UTF-8", html);
+    secureWipeString(html);
+  }
+
   void handleRoot() {
     // 同步版 WiFi.scanNetworks() 會阻塞 loop ~2-5 秒，此時血壓機若送資料
     // 可能在 driver buffer 溢出。改 async：頁面立即用上次完成的掃描結果
@@ -438,8 +599,6 @@ private:
     html += "<label class='field-label' for='wifi-password'>WiFi 密碼</label>";
     html += "<input id='wifi-password' type='password' name='password' placeholder='輸入 WiFi 密碼'>";
 
-    renderPinField(html);
-
     html += "<div class='inline-actions'>";
     html += "<button class='btn' type='submit'>儲存並連接</button>";
     html += "<a class='btn btn-secondary scan-refresh' href='/config?rescan=1'>重新掃描 WiFi</a>";
@@ -462,21 +621,10 @@ private:
 
     html += "</section>";
 
-    // 管理密碼設定：設定後所有設定變更/破壞性操作都需要 PIN。
-    // 注意：未設定期間任何連上網頁的人都能先設走 —— 首次部署時就該設定；
-    // 忘記密碼的救援路徑是長按裝置 Reset 鈕 3 秒（一併清除 PIN）。
     html += "<section class='panel form-shell'>";
-    html += "<h2>管理密碼</h2>";
-    html += "<p class='helper-text'>設定後，WiFi 設定、型號切換、清除記錄與重置操作都需輸入此密碼。忘記密碼可長按裝置 Reset 鈕 3 秒清除。建議部署時立即設定。</p>";
-    html += "<form method='post' action='/set_pin'>";
-    if (adminPin.length() > 0) {
-      html += "<label class='field-label'>目前密碼</label>";
-      html += "<input type='password' name='current_pin' placeholder='輸入目前管理密碼' autocomplete='current-password' required>";
-    }
-    html += "<label class='field-label'>新密碼（4-16 字元，留空 = 移除密碼）</label>";
-    html += "<input type='password' name='new_pin' placeholder='輸入新管理密碼' autocomplete='new-password'>";
-    html += "<button class='btn' type='submit'>儲存管理密碼</button>";
-    html += "</form>";
+    html += "<h2>存取安全</h2>";
+    html += "<p class='helper-text'>管理與工作人員帳號由每台裝置的獨立憑證保護；請勿共用或貼在公共區域。</p>";
+    html += "<a class='btn' href='/security'>管理裝置憑證</a>";
     html += "</section>";
 
     html += buildPageEnd();
@@ -485,8 +633,6 @@ private:
   }
 
   void handleConfigure() {
-    if (csrfBlocked()) return;
-    if (pinBlocked()) return;
     String new_ssid;
     String new_password = server->arg("password");
 
@@ -508,15 +654,37 @@ private:
       return;
     }
 
-    preferences->begin("wifi-config", false);
-    preferences->putString("ssid", new_ssid);
-    preferences->putString("password", new_password);
-    preferences->end();
+    bool stored = preferences->begin("wifi-config", false);
+    if (stored) {
+      (void)preferences->putString("ssid", new_ssid.c_str());
+      (void)preferences->putString("password", new_password.c_str());
+      preferences->end();
+      stored = preferences->begin("wifi-config", true);
+    }
+    String observedSsid;
+    String observedPassword;
+    if (stored) {
+      observedSsid = preferences->getString("ssid", "");
+      observedPassword = preferences->getString("password", "");
+      stored = preferences->isKey("ssid") &&
+               preferences->isKey("password") &&
+               observedSsid == new_ssid &&
+               observedPassword == new_password;
+      preferences->end();
+    }
+    secureWipeString(observedPassword);
+    secureWipeString(new_password);
+    if (!stored) {
+      secureWipeString(new_ssid);
+      server->send(503, "text/plain; charset=UTF-8",
+                   "WiFi 設定未能安全寫入，裝置不會重新啟動");
+      return;
+    }
 
     String html = buildPageStart("設定完成", "/config");
     html += "<section class='panel'>";
     html += "<h2>WiFi 設定已儲存</h2>";
-    html += "<p class='helper-text'>設備將重新啟動並嘗試連接新 WiFi。若失敗，可長按 Reset 3 秒還原設定。</p>";
+    html += "<p class='helper-text'>設備將重新啟動並嘗試連接新 WiFi。若連線失敗，請在裝置旁長按 Reset 3 秒，開啟 10 分鐘復原熱點。</p>";
     html += "<ul class='status-list'>";
     html += "<li><span>目標 SSID</span><strong>";
     html += htmlEscape(new_ssid);
@@ -524,35 +692,37 @@ private:
     html += "<li><span>設備網址</span><strong>http://";
     html += hostname;
     html += ".local</strong></li>";
-    html += "<li><span>備援 AP</span><strong>";
+    html += "<li><span>復原 AP（需實體啟動）</span><strong>";
     html += ap_ssid;
     html += "</strong></li>";
     html += "</ul>";
     html += "</section>";
     html += buildPageEnd();
 
+    if (!server->deferAfterResponse(&WebHandler::restartDevice, nullptr)) {
+      secureWipeString(new_ssid);
+      secureWipeString(html);
+      server->send(503, "text/plain; charset=UTF-8",
+                   "設定已儲存；請手動重新啟動裝置");
+      return;
+    }
     server->send(200, "text/html; charset=UTF-8", html);
-
-    delay(2000);
-    ESP.restart();
+    secureWipeString(new_ssid);
+    secureWipeString(html);
   }
 
   void handleBpModelPage() {
     String html = buildPageStart("血壓機型號設定", "/bp_model");
     html += "<section class='panel form-shell'>";
     html += "<h2>型號設定</h2>";
-    html += "<p class='helper-text'>目前內建 OMRON-HBP9030，若接入其他格式可選擇自定義。</p>";
+    html += "<p class='helper-text'>正式版只接受經驗證的 OMRON HBP-9030 USB 輸出格式 5。</p>";
     html += "<form method='post' action='/set_bp_model'>";
     html += "<label class='field-label' for='model-select'>選擇血壓機型號</label>";
     html += "<select id='model-select' name='model'>";
     html += "<option value='OMRON-HBP9030'";
     if (*bp_model == "OMRON-HBP9030") html += " selected";
     html += ">OMRON HBP-9030</option>";
-    html += "<option value='CUSTOM'";
-    if (*bp_model == "CUSTOM") html += " selected";
-    html += ">自定義格式</option>";
     html += "</select>";
-    renderPinField(html);
     html += "<button class='btn' type='submit'>儲存設定</button>";
     html += "</form>";
     html += "<div class='panel' style='margin:14px 0 0;padding:14px 16px;'>";
@@ -566,14 +736,27 @@ private:
   }
 
   void handleSetBpModel() {
-    if (csrfBlocked()) return;
-    if (pinBlocked()) return; // 選錯型號會靜默破壞解析，不算無害操作
     String new_model = server->arg("model");
 
-    if (new_model.length() > 0) {
-      preferences->begin("wifi-config", false);
-      preferences->putString("bp_model", new_model);
-      preferences->end();
+    if (bp_web::isProductionModelAllowed(new_model.c_str())) {
+      bool stored = preferences->begin("wifi-config", false);
+      if (stored) {
+        (void)preferences->putString("bp_model", new_model.c_str());
+        preferences->end();
+        stored = preferences->begin("wifi-config", true);
+      }
+      String observedModel;
+      if (stored) {
+        observedModel = preferences->getString("bp_model", "");
+        stored = preferences->isKey("bp_model") &&
+                 observedModel == new_model;
+        preferences->end();
+      }
+      if (!stored) {
+        server->send(503, "text/plain; charset=UTF-8",
+                     "型號設定未能安全寫入；目前解析設定不變");
+        return;
+      }
       *bp_model = new_model;
       // 之前漏了這行：parser 留在舊型號，UI 切換完全不會生效到下次重啟前
       bpParser->setModel(new_model);
@@ -696,7 +879,6 @@ private:
     html += "<h3>維護操作</h3>";
     html += "<p class='helper-text'>若要重新配網，可重置 WiFi 設定並重啟。</p>";
     html += "<form method='post' action='/reset' onsubmit=\"return confirm('確定要重置 WiFi 設定並重啟嗎？');\" style='display:inline'>";
-    renderPinField(html);
     html += "<button type='submit' class='btn btn-danger'>重置 WiFi 設定</button>";
     html += "</form>";
     html += "</section>";
@@ -788,7 +970,6 @@ private:
     html += "<h3>危險操作</h3>";
     html += "<p class='helper-text'>此操作會清除全部歷史資料且無法復原。</p>";
     html += "<form method='post' action='/clear_history' onsubmit=\"return confirm('確定要清除所有歷史記錄嗎？');\" style='display:inline'>";
-    renderPinField(html);
     html += "<button type='submit' class='btn btn-danger'>清除記錄</button>";
     html += "</form>";
     html += "</section>";
@@ -849,38 +1030,6 @@ private:
     server->send(200, "application/json", jsonStr);
   }
 
-  void handleSetPin() {
-    if (csrfBlocked()) return;
-    // 已設定 PIN 時，變更/移除都要先驗證目前密碼
-    if (!pinCheckPasses(server->arg("current_pin"), adminPin)) {
-      delay(500);
-      server->send(403, "text/plain; charset=UTF-8", "目前管理密碼錯誤");
-      return;
-    }
-    String newPin = server->arg("new_pin");
-    if (newPin.length() > 0 && !isValidPin(newPin)) {
-      server->send(400, "text/plain; charset=UTF-8", "無效的管理密碼（需 4-16 個非空白字元）");
-      return;
-    }
-
-    preferences->begin("wifi-config", false);
-    if (newPin.length() == 0) {
-      preferences->remove("admin_pin");
-    } else {
-      preferences->putString("admin_pin", newPin);
-    }
-    preferences->end();
-    adminPin = newPin;
-
-    String html = buildPageStart("管理密碼已更新", "/config", false, "<meta http-equiv='refresh' content='2;url=/config'>");
-    html += "<section class='panel'>";
-    html += (newPin.length() > 0) ? "<h2>管理密碼已設定</h2>" : "<h2>管理密碼已移除</h2>";
-    html += "<p class='helper-text'>正在返回設定頁面...</p>";
-    html += "</section>";
-    html += buildPageEnd();
-    server->send(200, "text/html; charset=UTF-8", html);
-  }
-
   void handleExportCsv() {
     String csv;
     appendHistoryCsv(csv, *recordManager);
@@ -889,8 +1038,6 @@ private:
   }
 
   void handleClearHistory() {
-    if (csrfBlocked()) return;
-    if (pinBlocked()) return;
     if (!recordManager->clearRecords()) {
       Serial.println("history_clear_failed");
       String errorHtml = buildPageStart("清除未完成", "/history");

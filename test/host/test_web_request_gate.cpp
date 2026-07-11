@@ -333,6 +333,12 @@ static void testDefaultDenyStateAndHostOrdering() {
   CHECK_TRUE(!result.allowed && result.status == 404,
              "claimed device cannot reuse claim route");
   result = gate.evaluate(
+    makeRequest(bp_http::RequestMethod::GET, "/config", "192.168.4.1",
+                admin.c_str()),
+    claimed, ap, 0xc0a80402U, 303);
+  CHECK_TRUE(result.allowed && result.role == AccessRole::ADMIN,
+             "freshly claimed owner can finish WiFi onboarding on current AP");
+  result = gate.evaluate(
     makeRequest(bp_http::RequestMethod::GET, "/", "192.168.4.1"),
     unclaimed, ap, 0xc0a80402U, 304);
   CHECK_TRUE(!result.allowed && result.status == 404,
@@ -345,6 +351,12 @@ static void testDefaultDenyStateAndHostOrdering() {
     unclaimed, recovery, 0xc0a80402U, 305);
   CHECK_TRUE(!result.allowed && result.status == 404,
              "recovery AP cannot perform first claim");
+  result = gate.evaluate(
+    makeRequest(bp_http::RequestMethod::POST, "/claim", "192.168.4.1",
+                nullptr, "http://192.168.4.1"),
+    claimed, recovery, 0xc0a80402U, 305);
+  CHECK_TRUE(result.allowed && result.role == AccessRole::NONE,
+             "physically opened recovery AP can verify armed token");
   result = gate.evaluate(
     makeRequest(bp_http::RequestMethod::GET, "/claim", "10.0.0.5"),
     unclaimed, sta, 0x0a000006U, 306);

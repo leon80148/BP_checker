@@ -28,6 +28,7 @@ echo "== host tests =="
 bash test/tooling/test_build_contract.sh
 bash scripts/check_usb_callback_contract.sh
 bash scripts/check_bounded_web_runtime.sh
+bash scripts/check_security_runtime_integration.sh
 bash scripts/run_host_tests.sh
 bash scripts/run_concurrency_stress.sh
 

@@ -159,13 +159,12 @@ constexpr AccessDecision authorizeRoute(HttpMethod method, const char* path,
   if (route == nullptr) return AccessDecision::DENY_UNKNOWN_ROUTE;
 
   if (isClaimRoute(*route)) {
-    if (claimState != ::DeviceClaimState::UNCLAIMED) {
-      return AccessDecision::DENY_STATE;
+    if (claimState == ::DeviceClaimState::UNCLAIMED) {
+      return requestInterface == RequestInterface::PROVISIONING_AP
+        ? AccessDecision::ALLOW : AccessDecision::DENY_INTERFACE;
     }
-    if (requestInterface != RequestInterface::PROVISIONING_AP) {
-      return AccessDecision::DENY_INTERFACE;
-    }
-    return AccessDecision::ALLOW;
+    return requestInterface == RequestInterface::RECOVERY_AP
+      ? AccessDecision::ALLOW : AccessDecision::DENY_STATE;
   }
 
   if (claimState != ::DeviceClaimState::CLAIMED) {
@@ -426,6 +425,13 @@ inline AccessRole authenticateBasic(const char* header, size_t headerLength,
 
 inline bool isProductionModelAllowed(const char* model) {
   return cStringEquals(model, "OMRON-HBP9030");
+}
+
+constexpr bool credentialRotationRequiresRestart(
+    DeviceSecretKind kind, RequestInterface requestInterface) {
+  return kind == DeviceSecretKind::AP &&
+         (requestInterface == RequestInterface::PROVISIONING_AP ||
+          requestInterface == RequestInterface::RECOVERY_AP);
 }
 
 inline constexpr size_t kAuthFailureSourceSlots = 16;

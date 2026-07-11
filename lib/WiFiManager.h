@@ -2,145 +2,192 @@
 #define WIFI_MANAGER_H
 
 #include <WiFi.h>
-#include <WebServer.h>
 #include <Preferences.h>
 #include <ESPmDNS.h>
 
+#include <cstring>
+
+#include "BoundedWebServer.h"
+#include "NetworkLifecycle.h"
+
 class WiFiManager {
-private:
-  WebServer* server;
-  Preferences* preferences;
-
-  const char* ap_ssid;
-  const char* ap_password;
-  const char* hostname;
-
-  String sta_ssid;
-  String sta_password;
-
-  bool serverStarted;
-  bool mdnsStarted;
-  bool wasConnected;
-
 public:
-  WiFiManager(WebServer* server, Preferences* preferences,
-              const char* ap_ssid, const char* ap_password, const char* hostname)
+  static constexpr uint32_t kRecoveryWindowMs =
+    bp_network::NetworkLifecycle::kRecoveryWindowMs;
+
+  WiFiManager(bp_web::BoundedWebServer* server, Preferences* preferences,
+              const char* apSsid, const char* apPassword,
+              const char* hostname)
     : server(server),
       preferences(preferences),
-      ap_ssid(ap_ssid),
-      ap_password(ap_password),
-      hostname(hostname),
-      serverStarted(false),
-      mdnsStarted(false),
-      wasConnected(false) {}
+      apSsid(apSsid),
+      apPassword(apPassword),
+      hostname(hostname) {}
 
   void loadCredentials() {
-    preferences->begin("wifi-config", true); // read-only
-    sta_ssid = preferences->getString("ssid", "");
-    sta_password = preferences->getString("password", "");
+    secureWipeString(staSsid);
+    secureWipeString(staPassword);
+    if (preferences == nullptr ||
+        !preferences->begin("wifi-config", true)) {
+      return;
+    }
+    staSsid = preferences->getString("ssid", "");
+    staPassword = preferences->getString("password", "");
     preferences->end();
+    if (staSsid.isEmpty()) secureWipeString(staPassword);
   }
 
-  bool hasCredentials() {
-    return sta_ssid != "";
+  bool hasCredentials() const { return !staSsid.isEmpty(); }
+
+  void discardLoadedCredentials() {
+    secureWipeString(staSsid);
+    secureWipeString(staPassword);
   }
 
-  void startAPMode() {
-    Serial.println("進入AP模式設定...");
-
-    WiFi.mode(WIFI_AP);
-    if (!WiFi.softAP(ap_ssid, ap_password)) {
-      Serial.println("[ERROR] WiFi.softAP 失敗：AP 可能無法被連到");
+  void startProvisioningAP() {
+    if (!validApConfiguration()) return;
+    const bool modeReady = WiFi.mode(WIFI_AP);
+    apActive = modeReady && WiFi.softAP(apSsid, apPassword);
+    if (!apActive) {
+      (void)WiFi.softAPdisconnect(true);
+      WiFi.mode(WIFI_OFF);
+      lifecycle.startLocked();
+      Serial.println("provisioning_ap_start_failed");
+      return;
     }
-
-    IPAddress myIP = WiFi.softAPIP();
-    Serial.print("AP IP地址: ");
-    Serial.println(myIP);
-
+    lifecycle.startProvisioning();
     startServerOnce();
-
-    Serial.println("HTTP伺服器已啟動");
-    Serial.print("請連接到WiFi: ");
-    Serial.print(ap_ssid);
-    Serial.print("，密碼: ");
-    Serial.println(ap_password);
-    Serial.print("然後開啟瀏覽器訪問: ");
-    Serial.println(myIP);
+    Serial.print("provisioning_ap_ready ssid=");
+    Serial.println(apSsid);
+    Serial.print("provisioning_url=http://");
+    Serial.println(WiFi.softAPIP());
   }
 
-  // 啟動 STA 連線（不阻塞）；webserver 立即上線，
-  // 連線完成後 tick() 會啟動 mDNS。
   void connectToWiFi() {
-    Serial.println("嘗試連接到WiFi（背景）...");
-    WiFi.mode(WIFI_AP_STA);
-    if (!WiFi.softAP(ap_ssid, ap_password)) {
-      Serial.println("[ERROR] WiFi.softAP 失敗：AP 備援可能無法被連到");
-    }
-    IPAddress apIP = WiFi.softAPIP();
-    Serial.print("AP IP地址: ");
-    Serial.println(apIP);
-
+    if (!hasCredentials()) return;
+    closeAP();
+    lifecycle.startStaOnly();
+    WiFi.mode(WIFI_STA);
     WiFi.setAutoReconnect(true);
-    WiFi.persistent(true);
-    WiFi.begin(sta_ssid.c_str(), sta_password.c_str());
-
-    // 短暫等待 STA 即時連線（最多 ~2s），讓常見快速連線情境能在開機時就好
-    for (int i = 0; i < 10 && WiFi.status() != WL_CONNECTED; i++) {
-      delay(200);
-      Serial.print(".");
-    }
-
-    // 不論連線是否成功，webserver 與 AP 都立即可用
+    WiFi.begin(staSsid.c_str(), staPassword.c_str());
+    secureWipeString(staPassword);
     startServerOnce();
-    Serial.println();
-    if (WiFi.status() == WL_CONNECTED) {
-      tick(); // 觸發 mDNS / log
-    } else {
-      Serial.println("STA 尚未連上，背景持續嘗試；AP/webserver 已上線。");
-    }
+    Serial.println("sta_connecting");
   }
 
-  // 主 loop 持續呼叫；偵測 STA 連線狀態邊緣（disconnect→connect）以重新註冊 mDNS。
-  void tick() {
-    bool nowConnected = (WiFi.status() == WL_CONNECTED);
-    if (nowConnected == wasConnected) return; // 沒邊緣
+  bool startRecoveryMode(uint32_t nowMs) {
+    if (!validApConfiguration() ||
+        !lifecycle.beginRecovery(true, hasCredentials(), nowMs)) {
+      return false;
+    }
+    const bool credentialsAvailable = hasCredentials();
+    const bool modeReady = WiFi.mode(
+      credentialsAvailable ? WIFI_AP_STA : WIFI_AP);
+    if (!modeReady || !WiFi.softAP(apSsid, apPassword)) {
+      (void)WiFi.softAPdisconnect(true);
+      apActive = false;
+      if (credentialsAvailable) {
+        lifecycle.startStaOnly();
+        WiFi.mode(WIFI_STA);
+      } else {
+        lifecycle.startLocked();
+        WiFi.mode(WIFI_OFF);
+      }
+      Serial.println("recovery_ap_start_failed");
+      return false;
+    }
+    apActive = true;
+    startServerOnce();
+    Serial.println("recovery_ap_ready duration_seconds=600");
+    return true;
+  }
 
-    if (nowConnected) {
-      Serial.println("WiFi 連線就緒");
-      Serial.print("IP地址: ");
-      Serial.println(WiFi.localIP());
+  void tick(uint32_t nowMs) {
+    if (lifecycle.tick(nowMs)) {
+      closeAP();
+      if (lifecycle.phase() == bp_network::NetworkPhase::STA_ONLY) {
+        WiFi.mode(WIFI_STA);
+      } else {
+        WiFi.mode(WIFI_OFF);
+      }
+      Serial.println("recovery_ap_closed");
+    }
 
+    const bool nowConnected = WiFi.status() == WL_CONNECTED;
+    lifecycle.observeStaConnected(nowConnected);
+    if (nowConnected == wasConnected) return;
+    wasConnected = nowConnected;
+    if (!nowConnected) {
       if (mdnsStarted) {
         MDNS.end();
-      }
-      if (MDNS.begin(hostname)) {
-        Serial.print("mDNS已啟動，可通過 http://");
-        Serial.print(hostname);
-        Serial.println(".local 訪問");
-        mdnsStarted = true;
-      } else {
-        Serial.println("mDNS服務啟動失敗");
         mdnsStarted = false;
       }
-
-      Serial.println("\n===== ESP32 血壓機 WiFi 轉發器 =====");
-      Serial.println("設備名稱: ESP32_BP_Monitor");
-      Serial.print("WiFi IP 地址: ");
-      Serial.println(WiFi.localIP());
-      Serial.println("等待數據中...");
-    } else {
-      Serial.println("WiFi STA 已斷線，背景重連中（AP/webserver 仍可用）");
-      // 不立即 MDNS.end()；重連時會 end+begin
+      Serial.println("sta_disconnected_background_reconnect");
+      return;
     }
-    wasConnected = nowConnected;
+
+    if (mdnsStarted) MDNS.end();
+    mdnsStarted = MDNS.begin(hostname);
+    Serial.print("sta_ready ip=");
+    Serial.println(WiFi.localIP());
   }
 
+  bool isApActive() const { return apActive && lifecycle.apRequired(); }
+  bp_web::ApPurpose apPurpose() const {
+    if (lifecycle.phase() == bp_network::NetworkPhase::PROVISIONING_AP) {
+      return bp_web::ApPurpose::PROVISIONING;
+    }
+    if (lifecycle.phase() == bp_network::NetworkPhase::RECOVERY_AP) {
+      return bp_web::ApPurpose::RECOVERY;
+    }
+    return bp_web::ApPurpose::NONE;
+  }
+  bool isStaActive() const { return WiFi.status() == WL_CONNECTED; }
+  uint32_t apAddress() const {
+    return apActive ? static_cast<uint32_t>(WiFi.softAPIP()) : 0;
+  }
+  uint32_t staAddress() const {
+    return isStaActive() ? static_cast<uint32_t>(WiFi.localIP()) : 0;
+  }
+  const char* mdnsName() const { return hostname; }
+
 private:
+  bp_web::BoundedWebServer* server = nullptr;
+  Preferences* preferences = nullptr;
+  const char* apSsid = nullptr;
+  const char* apPassword = nullptr;
+  const char* hostname = nullptr;
+  String staSsid;
+  String staPassword;
+  bool serverStarted = false;
+  bool mdnsStarted = false;
+  bool wasConnected = false;
+  bool apActive = false;
+  bp_network::NetworkLifecycle lifecycle;
+
+  static void secureWipeString(String& value) {
+    volatile char* bytes = value.begin();
+    size_t length = value.length();
+    while (length-- != 0) *bytes++ = 0;
+    value = String();
+  }
+
+  bool validApConfiguration() const {
+    return server != nullptr && apSsid != nullptr && apSsid[0] != '\0' &&
+           apPassword != nullptr && strlen(apPassword) ==
+             bp_web::kCanonicalCredentialChars;
+  }
+
+  void closeAP() {
+    if (apActive) (void)WiFi.softAPdisconnect(true);
+    apActive = false;
+  }
+
   void startServerOnce() {
-    if (serverStarted) return;
+    if (serverStarted || server == nullptr) return;
     server->begin();
     serverStarted = true;
   }
 };
 
-#endif 
+#endif

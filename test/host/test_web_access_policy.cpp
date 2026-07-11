@@ -165,6 +165,11 @@ static void testClaimBoundary() {
                RequestInterface::PROVISIONING_AP, AccessRole::ADMIN)),
              static_cast<int>(AccessDecision::DENY_STATE),
              "claim is one-time after device is claimed");
+    CHECK_EQ(static_cast<int>(authorizeRoute(
+               method, "/claim", ::DeviceClaimState::CLAIMED,
+               RequestInterface::RECOVERY_AP, AccessRole::NONE)),
+             static_cast<int>(AccessDecision::ALLOW),
+             "claimed recovery route requires a physically opened AP");
   }
 
   CHECK_EQ(static_cast<int>(authorizeRoute(
@@ -507,6 +512,27 @@ static void testProductionModelAllowlist() {
              "model suffix denied");
 }
 
+static void testCredentialRotationRuntimeBoundary() {
+  CHECK_TRUE(credentialRotationRequiresRestart(
+               DeviceSecretKind::AP, RequestInterface::PROVISIONING_AP),
+             "AP secret rotation restarts an active provisioning AP");
+  CHECK_TRUE(credentialRotationRequiresRestart(
+               DeviceSecretKind::AP, RequestInterface::RECOVERY_AP),
+             "AP secret rotation restarts an active recovery AP");
+  CHECK_TRUE(!credentialRotationRequiresRestart(
+               DeviceSecretKind::AP, RequestInterface::STA),
+             "AP secret rotation from STA needs no immediate restart");
+  CHECK_TRUE(!credentialRotationRequiresRestart(
+               DeviceSecretKind::ADMIN, RequestInterface::PROVISIONING_AP),
+             "admin rotation does not restart the device");
+  CHECK_TRUE(!credentialRotationRequiresRestart(
+               DeviceSecretKind::STAFF, RequestInterface::RECOVERY_AP),
+             "staff rotation does not restart the device");
+  CHECK_TRUE(!credentialRotationRequiresRestart(
+               DeviceSecretKind::BOOTSTRAP, RequestInterface::STA),
+             "bootstrap rotation does not restart the device");
+}
+
 static void testPerSourceFailureLimitAndCooldown() {
   AuthFailureLimiter limiter;
   const uint32_t source = 0x0a000001u;
@@ -580,6 +606,7 @@ int main() {
   testBasicAuthentication();
   testStrictDecoderClearsPartialCredentialOnFailure();
   testProductionModelAllowlist();
+  testCredentialRotationRuntimeBoundary();
   testPerSourceFailureLimitAndCooldown();
   testGlobalGuardAndFixedStorage();
   testUnsignedClockWrap();

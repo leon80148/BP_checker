@@ -7,7 +7,7 @@ for token in \
   "latest-vitals" "kpi-grid" "recent-table" "<details" "diagnostic-data" "last-updated" \
   "history-table" "danger-zone" "btn-danger" "/export.csv" "匯出 CSV" \
   "form-shell" "field-label" "helper-text" "scan-refresh" "掃描中" \
-  "/set_pin" "管理密碼" "current_pin" "new_pin" \
+  "/claim" "/security" "/rotate_credentials" "一次性啟用碼" "管理者帳號" "工作人員帳號" \
   "value-na" "state-na" \
   "kpi-sys" "kpi-dia" "kpi-pul" \
   "conn-transport" "conn-status" "conn-ip" \
@@ -31,7 +31,10 @@ do
   }
 done
 
-for forbidden in "rawData" "transientSubjectId" "/raw_data" "查看原始數據" "量測原始資料"; do
+for forbidden in \
+  "rawData" "transientSubjectId" "/raw_data" "查看原始數據" "量測原始資料" \
+  "/set_pin" "adminPin" "current_pin" "new_pin"
+do
   if grep -Fq -- "$forbidden" "$FILE"; then
     echo "forbidden identity-bearing diagnostic sink: $forbidden"
     exit 1
