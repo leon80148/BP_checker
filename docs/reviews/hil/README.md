@@ -25,3 +25,10 @@ bash scripts/run_hil_acceptance.sh
 
 The validator intentionally refuses PASS when hardware IDs, any required file,
 the rollback drill, approval, or the complete soak is absent.
+
+`transport-faults.json` uses schema `bp-hil-transport-v1` and must bind both
+hardware IDs, USB2 Type-B/function-32 verification, power/disconnect/overflow
+recovery, and an all-passing `faults` array. `network-security.json` uses
+`bp-hil-network-v1` and must bind the board ID plus AP shutdown, physical
+recovery, expiry, old-credential rejection, SDK erase, isolated VLAN, and the
+documented HTTP residual-risk acceptance.

@@ -12,13 +12,16 @@ not approval for deployment.
 - Set `BP_RELEASE_PUBLIC_KEY_DER_HEX` to the approved P-256 public SPKI DER hex.
   Never place the private key in this repository, firmware, workflow, or logs.
 - Run `scripts/package_release.sh --candidate`. Record the bundle path, source
-  SHA, SBOM, firmware SHA-256, size, and quality-gate approval.
+  SHA, SBOM, firmware SHA-256, size, quality-gate approval, and emitted
+  `candidate_checksums_sha256`. Transfer that digest to the signing approver by
+  a separate authenticated channel.
 
 ## Signing and Verification
 
 - Have the authorized HSM/offline signer implement
   `signer MANIFEST_PATH SIGNATURE_OUTPUT_PATH`, then set its executable path as
-  `BP_RELEASE_SIGN_COMMAND`.
+  `BP_RELEASE_SIGN_COMMAND`. Set the separately approved checksum digest as
+  `BP_RELEASE_CANDIDATE_SHA256`.
 - Run `scripts/package_release.sh --sign-candidate build/release/<bundle>`.
   The command verifies the DER signature against the embedded public anchor and
   refreshes `checksums.sha256`.
@@ -29,6 +32,9 @@ not approval for deployment.
 
 - Attach passing supported-browser evidence and the current reference-board /
   HBP-9030 HIL record, including failed-update rollback and a 24-hour soak.
+- Browser automation must use a new evidence directory and one unique
+  `BP_BROWSER_RUN_ID`; its runner receives browser path, base URL, output path,
+  run ID, and source SHA. Both JSON reports must bind those run values.
 - Record clinical owner, security reviewer, release approver, date, clinic
   cohort, rollback image, maintenance window, and EOL/support date.
 - Reject the release if the trust anchor is empty, evidence is missing, the

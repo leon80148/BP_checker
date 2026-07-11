@@ -24,6 +24,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install --yes jq
 
       - name: Run the local quality gate
+        env:
+          BP_RELEASE_PUBLIC_KEY_DER_HEX: ${{ vars.BP_RELEASE_PUBLIC_KEY_DER_HEX }}
         run: bash scripts/run_quality_gate.sh
 
       - name: Package unsigned release candidate

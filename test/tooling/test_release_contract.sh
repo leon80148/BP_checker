@@ -31,10 +31,16 @@ for token in \
   '--candidate' '--sign-candidate' \
   'BP_RELEASE_SEQUENCE' 'BP_RELEASE_MINIMUM_SEQUENCE' \
   'BP_RELEASE_PUBLIC_KEY_DER_HEX' 'BP_RELEASE_SIGN_COMMAND' \
+  'BP_RELEASE_CANDIDATE_SHA256' \
   'bash scripts/run_quality_gate.sh' \
   'schema=bp-update-v1' 'target=esp32:esp32:esp32s3' \
   'source_sha=' 'minimum_sequence=' 'sha256=' \
-  'source_dirty' 'trust_anchor_sha256' 'checksums.sha256'
+  'source_dirty' 'trust_anchor_sha256' 'checksums.sha256' \
+  'candidate bundle must be under build/release' \
+  'candidate checksum verification failed' \
+  'candidate trust anchor binding failed' \
+  'candidate manifest binding failed' \
+  'candidate file set invalid'
 do
   grep -Fq -- "$token" "$package" || {
     echo "missing package contract: $token" >&2
@@ -50,14 +56,14 @@ if grep -Eq '(^|[[:space:]])eval([[:space:]]|$)' "$package"; then
   exit 1
 fi
 
-for token in BP_BROWSER_EXECUTABLE BP_BROWSER_VERSION BP_BROWSER_EVIDENCE_DIR routes.json accessibility.json screenshots; do
+for token in BP_BROWSER_EXECUTABLE BP_BROWSER_VERSION BP_BROWSER_EVIDENCE_DIR BP_BROWSER_RUN_ID source_sha base_url routes.json accessibility.json screenshots; do
   grep -Fq -- "$token" scripts/run_browser_checks.sh || {
     echo "missing browser evidence contract: $token" >&2
     exit 1
   }
 done
 
-for token in BP_HIL_BOARD_ID BP_HIL_MONITOR_ID BP_HIL_LOG_DIR BP_HIL_SOAK_HOURS 24 signed-update rollback soak-summary.json; do
+for token in BP_HIL_BOARD_ID BP_HIL_MONITOR_ID BP_HIL_LOG_DIR BP_HIL_SOAK_HOURS 24 signed-update rollback soak-summary.json bp-hil-transport-v1 bp-hil-network-v1 old_credentials_rejected ap_shutdown_passed; do
   grep -Fq -- "$token" scripts/run_hil_acceptance.sh || {
     echo "missing HIL evidence contract: $token" >&2
     exit 1

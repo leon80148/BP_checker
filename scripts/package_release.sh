@@ -136,12 +136,39 @@ EOF
   fi
   refresh_checksums "$bundle"
   echo "$bundle"
+  echo "candidate_checksums_sha256=$(sha256_file "$bundle/checksums.sha256")"
 }
 
 sign_candidate() {
-  local bundle=${1:-}
-  [[ -d "$bundle" ]] || { echo "candidate bundle directory is required" >&2; exit 2; }
+  local requested_bundle=${1:-}
+  [[ -d "$requested_bundle" ]] || { echo "candidate bundle directory is required" >&2; exit 2; }
+  local release_root bundle
+  mkdir -p build/release
+  release_root=$(cd build/release && pwd -P)
+  bundle=$(cd "$requested_bundle" && pwd -P)
+  case "$bundle" in
+    "$release_root"/*) ;;
+    *) echo "candidate bundle must be under build/release" >&2; exit 2 ;;
+  esac
+  if find "$bundle" -type l -print | grep -q .; then
+    echo "candidate bundle cannot contain symbolic links" >&2
+    exit 1
+  fi
+  local expected_files actual_files
+  expected_files=$'checksums.sha256\ncompile.log\nfirmware.bin\nmanifest.txt\nrelease-public-key.der\nrelease.json\nsbom.json'
+  actual_files=$(
+    cd "$bundle"
+    find . -maxdepth 1 -type f -print | sed 's#^./##' | LC_ALL=C sort
+  )
+  if [[ "$actual_files" != "$expected_files" ]]; then
+    echo "candidate file set invalid" >&2
+    exit 1
+  fi
   : "${BP_RELEASE_SIGN_COMMAND:?BP_RELEASE_SIGN_COMMAND is required}"
+  : "${BP_RELEASE_CANDIDATE_SHA256:?BP_RELEASE_CANDIDATE_SHA256 is required}"
+  [[ "$BP_RELEASE_CANDIDATE_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+    echo "BP_RELEASE_CANDIDATE_SHA256 must be lowercase SHA-256" >&2; exit 2;
+  }
   [[ "$BP_RELEASE_SIGN_COMMAND" != *[[:space:]]* ]] || {
     echo "BP_RELEASE_SIGN_COMMAND must be one executable path" >&2; exit 2;
   }
@@ -149,12 +176,82 @@ sign_candidate() {
     echo "release signer is not executable" >&2; exit 2;
   }
   command -v openssl >/dev/null || { echo "openssl is required" >&2; exit 1; }
+  command -v xxd >/dev/null || { echo "xxd is required" >&2; exit 1; }
+  local approval_digest
+  approval_digest=$(sha256_file "$bundle/checksums.sha256")
+  if [[ "$approval_digest" != "$BP_RELEASE_CANDIDATE_SHA256" ]]; then
+    echo "candidate approval digest mismatch" >&2
+    exit 1
+  fi
+  if ! (
+    cd "$bundle"
+    if command -v sha256sum >/dev/null; then
+      sha256sum -c checksums.sha256
+    else
+      shasum -a 256 -c checksums.sha256
+    fi
+  ) >/dev/null 2>&1; then
+    echo "candidate checksum verification failed" >&2
+    exit 1
+  fi
   jq -e '.schema == "bp-release-candidate-v1" and .status == "unsigned" and
          .source_dirty == false and .trust_anchor_configured == true' \
     "$bundle/release.json" >/dev/null
   [[ -s "$bundle/manifest.txt" && -s "$bundle/release-public-key.der" ]] || {
     echo "anchored candidate inputs are incomplete" >&2; exit 1;
   }
+
+  local version source_sha sequence minimum artifact_sha artifact_size
+  version=$(jq -r '.version' "$bundle/release.json")
+  source_sha=$(jq -r '.source_sha' "$bundle/release.json")
+  sequence=$(jq -r '.sequence' "$bundle/release.json")
+  minimum=$(jq -r '.minimum_sequence' "$bundle/release.json")
+  artifact_sha=$(sha256_file "$bundle/firmware.bin")
+  artifact_size=$(wc -c < "$bundle/firmware.bin" | tr -d ' ')
+  if [[ -n "$(git status --porcelain --untracked-files=normal)" ]] ||
+     [[ "$source_sha" != "$(git rev-parse --verify 'HEAD^{commit}')" ]]; then
+    echo "candidate source revision is not the clean signing checkout" >&2
+    exit 1
+  fi
+  local expected_manifest
+  expected_manifest=$(mktemp)
+  printf '%s\n' \
+    'schema=bp-update-v1' \
+    "version=$version" \
+    'target=esp32:esp32:esp32s3' \
+    "source_sha=$source_sha" \
+    "sequence=$sequence" \
+    "minimum_sequence=$minimum" \
+    "size=$artifact_size" \
+    "sha256=$artifact_sha" > "$expected_manifest"
+  if ! cmp -s "$expected_manifest" "$bundle/manifest.txt" ||
+     ! jq -e --arg sha "$source_sha" --arg artifact_sha "$artifact_sha" '
+       .firmware.source_sha == $sha and .firmware.source_dirty == false and
+       .artifact.sha256 == $artifact_sha
+     ' "$bundle/sbom.json" >/dev/null ||
+     ! jq -e --arg artifact_sha "$artifact_sha" '
+       .artifact_sha256 == $artifact_sha
+     ' "$bundle/release.json" >/dev/null; then
+    rm -f "$expected_manifest"
+    echo "candidate manifest binding failed" >&2
+    exit 1
+  fi
+  rm -f "$expected_manifest"
+
+  local anchor_hex anchor_sha recorded_anchor_sha
+  anchor_hex=$(xxd -p -c 1000 "$bundle/release-public-key.der" | tr -d '\r\n')
+  anchor_sha=$(printf '%s' "$anchor_hex" | {
+    if command -v sha256sum >/dev/null; then sha256sum; else shasum -a 256; fi
+  } | awk '{print $1}')
+  recorded_anchor_sha=$(jq -r '.trust_anchor_sha256' "$bundle/release.json")
+  if [[ "$anchor_sha" != "$recorded_anchor_sha" ]] ||
+     ! jq -e --arg anchor_sha "$anchor_sha" '
+       .firmware.trust_anchor_configured == true and
+       .firmware.trust_anchor_sha256 == $anchor_sha
+     ' "$bundle/sbom.json" >/dev/null; then
+    echo "candidate trust anchor binding failed" >&2
+    exit 1
+  fi
 
   "$BP_RELEASE_SIGN_COMMAND" "$bundle/manifest.txt" "$bundle/manifest.sig.der"
   local signature_size
@@ -164,6 +261,10 @@ sign_candidate() {
   }
   openssl pkey -pubin -inform DER -in "$bundle/release-public-key.der" \
     -out "$bundle/release-public-key.pem" >/dev/null 2>&1
+  openssl pkey -pubin -in "$bundle/release-public-key.pem" -text -noout 2>&1 \
+    | grep -Eq 'ASN1 OID: prime256v1|NIST CURVE: P-256' || {
+      echo "release trust anchor must be P-256" >&2; exit 1;
+    }
   openssl dgst -sha256 -verify "$bundle/release-public-key.pem" \
     -signature "$bundle/manifest.sig.der" "$bundle/manifest.txt" >/dev/null
   base64 < "$bundle/manifest.sig.der" | tr -d '\r\n' \

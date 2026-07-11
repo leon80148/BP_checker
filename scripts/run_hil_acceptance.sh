@@ -36,6 +36,20 @@ jq -e --arg board "$BP_HIL_BOARD_ID" --arg monitor "$BP_HIL_MONITOR_ID" '
   ([.cases[].kind] | contains(["normal","boundary","error","movement",
     "fragmented","burst","disconnect","reconnect"]))
 ' "$BP_HIL_LOG_DIR/corpus-summary.json" >/dev/null
+jq -e --arg board "$BP_HIL_BOARD_ID" --arg monitor "$BP_HIL_MONITOR_ID" '
+  .schema == "bp-hil-transport-v1" and .board_id == $board and
+  .monitor_id == $monitor and .usb2_type_b_verified == true and
+  .function_32_format_5_verified == true and .power_fault_passed == true and
+  .disconnect_reconnect_passed == true and .overflow_recovery_passed == true and
+  all(.faults[]; .passed == true)
+' "$BP_HIL_LOG_DIR/transport-faults.json" >/dev/null
+jq -e --arg board "$BP_HIL_BOARD_ID" '
+  .schema == "bp-hil-network-v1" and .board_id == $board and
+  .ap_shutdown_passed == true and .physical_recovery_passed == true and
+  .recovery_expiry_passed == true and .old_credentials_rejected == true and
+  .sdk_erase_passed == true and .isolated_vlan_verified == true and
+  .http_residual_accepted == true
+' "$BP_HIL_LOG_DIR/network-security.json" >/dev/null
 jq -e '.schema == "bp-hil-update-v1" and .signed_update_passed == true and
        .wrong_signature_rejected == true and .downgrade_rejected == true' \
   "$BP_HIL_LOG_DIR/signed-update.json" >/dev/null
