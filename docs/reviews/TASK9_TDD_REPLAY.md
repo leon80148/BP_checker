@@ -102,6 +102,11 @@ The curve-pin review RED is `bash scripts/check_firmware_update_runtime.sh` on
 `37eb6c7`; it exits 1 on missing `MBEDTLS_ECP_DP_SECP256R1`. At `d8212c5`, the
 runtime checks the parsed EC group ID and the pinned target compiles.
 
+The pending-image quality RED is `bash scripts/check_firmware_update_runtime.sh`
+on `7e51ad6`; it exits 1 on missing `esp_partition_read`. At `b92863d`, the
+contract requires running-partition hash verification before pending health and
+receipt cleanup before mark-valid; the target compiles at 1,137,212 bytes.
+
 ## Bounded Binary HTTP Stream
 
 The production commit is `da220d1`. Its parent, `f43c855`, still rejects every
