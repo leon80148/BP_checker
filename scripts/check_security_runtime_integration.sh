@@ -17,6 +17,19 @@ grep -Fq 'server.configureAccess(' "$sketch"
 grep -Fq 'bootloader_random_enable();' "$sketch"
 grep -Fq 'bootloader_random_disable();' "$sketch"
 grep -Fq 'esp_fill_random(' "$sketch"
+for token in \
+  '#include "lib/FirmwareUpdateRuntime.h"' \
+  'FirmwareUpdateRuntime firmwareUpdateRuntime' \
+  'firmwareUpdateRuntime.begin(' \
+  'server.configureStreamConsumer(firmwareUpdateRuntime.streamCallbacks())' \
+  'firmwareUpdateRuntime.confirmPendingBoot(' \
+  'firmwareUpdateRuntime.rollbackIfPending()'
+do
+  grep -Fq -- "$token" "$sketch" || {
+    echo "missing firmware update boot integration: $token" >&2
+    exit 1
+  }
+done
 
 if grep -Eq '(^|[^A-Za-z])WebServer server\(' "$sketch"; then
   echo "stock WebServer remains the product runtime" >&2

@@ -121,7 +121,7 @@ bool FirmwareUpdateRuntime::begin(bool allowFirstInitialization) {
   _pendingVerify = imageState == ESP_OTA_IMG_PENDING_VERIFY;
   _lastResult = _sequenceStore.load();
   if (_lastResult == bp_update::Result::STORAGE_UNINITIALIZED &&
-      allowFirstInitialization) {
+      allowFirstInitialization && !_pendingVerify) {
     _lastResult = _sequenceStore.initialize(0);
   }
   if (_lastResult != bp_update::Result::OK) return false;

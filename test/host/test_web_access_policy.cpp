@@ -65,7 +65,7 @@ static AccessRole authenticate(const std::string& header,
 }
 
 static void testCompileTimeRouteRegistry() {
-  static_assert(kRoutePolicyCount == 18,
+  static_assert(kRoutePolicyCount == 21,
                 "every supported GET/POST route must be classified");
   static_assert(routeTableIsValid(),
                 "route registry must be unique and fail closed");
@@ -98,6 +98,9 @@ static void testCompileTimeRouteRegistry() {
     {HttpMethod::GET,  "/measurement_policy", AccessRole::ADMIN, 0, RouteBodyKind::NONE, false},
     {HttpMethod::POST, "/set_measurement_policy", AccessRole::ADMIN, 512, RouteBodyKind::FORM, true},
     {HttpMethod::POST, "/reset", AccessRole::ADMIN, 0, RouteBodyKind::NONE, true},
+    {HttpMethod::GET, "/firmware_update", AccessRole::ADMIN, 0, RouteBodyKind::NONE, false},
+    {HttpMethod::POST, "/authorize_firmware", AccessRole::ADMIN, 1024, RouteBodyKind::FORM, true},
+    {HttpMethod::POST, "/install_firmware", AccessRole::ADMIN, 1310720, RouteBodyKind::STREAM, true},
   };
 
   CHECK_EQ(sizeof(expected) / sizeof(expected[0]), kRoutePolicyCount,
@@ -180,6 +183,8 @@ static void testRoleToSurfacePolicy() {
     WebSurface::RESET_CONTROL,
     WebSurface::CLEAR_HISTORY_CONTROL,
     WebSurface::POLICY_UPDATE_CONTROL,
+    WebSurface::ADMIN_UPDATE_NAV,
+    WebSurface::FIRMWARE_UPDATE_CONTROL,
   };
   for (WebSurface surface : staffSurfaces) {
     CHECK_TRUE(!surfaceVisible(AccessRole::NONE, surface),

@@ -28,9 +28,11 @@ enum class WebSurface : uint8_t {
   ADMIN_MODEL_NAV,
   ADMIN_SECURITY_NAV,
   ADMIN_POLICY_NAV,
+  ADMIN_UPDATE_NAV,
   RESET_CONTROL,
   CLEAR_HISTORY_CONTROL,
   POLICY_UPDATE_CONTROL,
+  FIRMWARE_UPDATE_CONTROL,
 };
 
 inline constexpr bool surfaceVisible(AccessRole role, WebSurface surface) {
@@ -43,9 +45,11 @@ inline constexpr bool surfaceVisible(AccessRole role, WebSurface surface) {
     case WebSurface::ADMIN_MODEL_NAV:
     case WebSurface::ADMIN_SECURITY_NAV:
     case WebSurface::ADMIN_POLICY_NAV:
+    case WebSurface::ADMIN_UPDATE_NAV:
     case WebSurface::RESET_CONTROL:
     case WebSurface::CLEAR_HISTORY_CONTROL:
     case WebSurface::POLICY_UPDATE_CONTROL:
+    case WebSurface::FIRMWARE_UPDATE_CONTROL:
       return role == AccessRole::ADMIN;
     default:
       return false;
@@ -107,6 +111,9 @@ inline constexpr RoutePolicy kRoutePolicies[] = {
   {HttpMethod::GET, "/measurement_policy", AccessRole::ADMIN, 0, RouteBodyKind::NONE, false, true},
   {HttpMethod::POST, "/set_measurement_policy", AccessRole::ADMIN, 512, RouteBodyKind::FORM, true, true},
   {HttpMethod::POST, "/reset", AccessRole::ADMIN, 0, RouteBodyKind::NONE, true, true},
+  {HttpMethod::GET, "/firmware_update", AccessRole::ADMIN, 0, RouteBodyKind::NONE, false, true},
+  {HttpMethod::POST, "/authorize_firmware", AccessRole::ADMIN, 1024, RouteBodyKind::FORM, true, true},
+  {HttpMethod::POST, "/install_firmware", AccessRole::ADMIN, 1310720, RouteBodyKind::STREAM, true, true},
 };
 
 inline constexpr size_t kRoutePolicyCount =
@@ -138,7 +145,7 @@ constexpr bool routeBodyPolicyIsValid(const RoutePolicy& route) {
 }
 
 constexpr bool routeTableIsValid() {
-  if (kRoutePolicyCount != 18) return false;
+  if (kRoutePolicyCount != 21) return false;
   for (size_t i = 0; i < kRoutePolicyCount; ++i) {
     const RoutePolicy& route = kRoutePolicies[i];
     if (route.path == nullptr || route.path[0] != '/' || !route.noStore) {

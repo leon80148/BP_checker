@@ -26,9 +26,25 @@ for token in \
   "surfaceVisible(server->currentRole()" \
   "data-loss-count" "reconnect-count" \
   "loss.textContent=d.data_loss_count" "reconnect.textContent=d.reconnect_count" \
-  "時間來源"
+    "時間來源"
 do
   grep -Fq -- "$token" "$FILE" || { echo "missing token: $token"; exit 1; }
+done
+
+for token in \
+  'FirmwareUpdateRuntime* firmwareUpdateRuntime' \
+  '/firmware_update' '/authorize_firmware' '/install_firmware' \
+  "fetch('/install_firmware'" \
+  "'Content-Type':'application/octet-stream'" \
+  'trustAnchorConfigured()' \
+  'authorizeUpdate(' \
+  'stagedForReboot()' \
+  '韌體簽章信任錨尚未設定'
+do
+  grep -Fq -- "$token" "$FILE" || {
+    echo "missing signed firmware update UI contract: $token"
+    exit 1
+  }
 done
 
 for token in \

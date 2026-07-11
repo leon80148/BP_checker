@@ -13,6 +13,7 @@
 #include "lib/BuildInfo.h"
 #include "lib/BoundedWebServer.h"
 #include "lib/DeviceSecurity.h"
+#include "lib/FirmwareUpdateRuntime.h"
 #include "lib/WebRequestGate.h"
 #include "lib/transports/MonitorTransport.h"
 #include "lib/transports/UartTransport.h"
@@ -36,6 +37,7 @@ bp_web::BoundedWebServer server(80);
 
 // 非易失性儲存
 Preferences preferences;
+FirmwareUpdateRuntime firmwareUpdateRuntime(&preferences);
 
 bool fillDeviceEntropy(void*, uint8_t* output, size_t length) {
   if (output == nullptr || length == 0) return false;
@@ -145,7 +147,7 @@ bool provideWebRuntimeSnapshot(
   return true;
 }
 
-void loadHistoryFromStorage() {
+bool loadHistoryFromStorage() {
   const bool historyLoaded = recordManager.loadFromStorage();
   if (!historyLoaded) {
     lastData =
@@ -154,10 +156,16 @@ void loadHistoryFromStorage() {
       "<p class='helper-text'>歷史記錄載入未完成；請勿將目前列表視為完整記錄。"
       "請聯絡管理人員檢查儲存空間，修復後重新啟動裝置。</p></div>";
     Serial.println("history_load_failed");
-    return;
+    return false;
   }
   Serial.print("history_load_succeeded count=");
   Serial.println(recordManager.getRecordCount());
+  return true;
+}
+
+void failPendingBoot(const char* reason) {
+  Serial.println(reason);
+  firmwareUpdateRuntime.rollbackIfPending();
 }
 
 void setup() {
@@ -176,6 +184,13 @@ void setup() {
   // 必須在第一個 WiFi radio API 前關閉 Arduino driver persistence。
   WiFi.persistent(false);
 
+  // 先辨識 pending OTA。這必須早於其他可失敗的應用狀態載入，才能在
+  // 自我檢查失敗時交還 bootloader 回滾；一般開機若更新儲存不可用，
+  // 臨床功能仍可啟動，但更新入口保持鎖定。
+  if (!firmwareUpdateRuntime.begin(true)) {
+    failPendingBoot("firmware_update_runtime_locked");
+  }
+
   // ESP-IDF 要求在 RF/ADC 尚未啟用時明確打開 early-boot entropy source。
   bootloader_random_enable();
   const DeviceSecurityResult securityLoad = deviceSecurity.loadOrCreate();
@@ -183,11 +198,15 @@ void setup() {
   if (securityLoad != DeviceSecurityResult::OK &&
       deviceSecurity.availability() !=
         DeviceSecurityAvailability::REBOOT_REQUIRED) {
-    Serial.println("security_state_load_failed");
+    failPendingBoot("security_state_load_failed");
     return;
   }
   if (deviceSecurity.availability() ==
       DeviceSecurityAvailability::REBOOT_REQUIRED) {
+    if (firmwareUpdateRuntime.pendingVerify()) {
+      failPendingBoot("pending_boot_security_reboot_required");
+      return;
+    }
     ESP.restart();
     return;
   }
@@ -199,7 +218,7 @@ void setup() {
       deviceSecurity.finishExternalErase(erased);
     bootloader_random_disable();
     if (eraseResult != DeviceSecurityResult::OK) {
-      Serial.println("security_external_erase_failed");
+      failPendingBoot("security_external_erase_failed");
       if (deviceSecurity.availability() ==
           DeviceSecurityAvailability::REBOOT_REQUIRED) {
         ESP.restart();
@@ -209,7 +228,7 @@ void setup() {
   }
 
   if (measurementPolicyStore.loadOrCreate() != MeasurementPolicyResult::OK) {
-    Serial.println("measurement_policy_load_failed");
+    failPendingBoot("measurement_policy_load_failed");
     return;
   }
 
@@ -229,6 +248,7 @@ void setup() {
                               &transportStatus, monitorTransport,
                               &uptimeClock,
                               &measurementPolicyStore,
+                              &firmwareUpdateRuntime,
                               hostname, ap_ssid);
 
   wifiManager = new WiFiManager(
@@ -254,14 +274,19 @@ void setup() {
   bpParser.setModel(bp_model);
   
   // 從儲存中加載歷史記錄
-  loadHistoryFromStorage();
+  const bool historyLoaded = loadHistoryFromStorage();
   
   // 設置網頁路由
   webHandler->setupRoutes();
   server.configureAccess(&webRequestGate, provideWebRuntimeSnapshot, nullptr);
+  const bool streamConfigured = server.configureStreamConsumer(firmwareUpdateRuntime.streamCallbacks());
+  if (!streamConfigured) {
+    failPendingBoot("firmware_update_stream_configuration_failed");
+    return;
+  }
   
   // 初始化數據處理器
-  dataProcessor->setup();
+  const bool transportReady = dataProcessor->setup();
   
   // 載入WiFi設定
   wifiManager->loadCredentials();
@@ -285,6 +310,19 @@ void setup() {
   // 設置台北時區
   setenv("TZ", "CST-8", 1);
   tzset();
+
+  if (firmwareUpdateRuntime.pendingVerify()) {
+    const bp_update::HealthSnapshot health{
+      historyLoaded,
+      transportReady,
+      streamConfigured &&
+        deviceSecurity.availability() == DeviceSecurityAvailability::READY
+    };
+    if (!firmwareUpdateRuntime.confirmPendingBoot(health)) {
+      Serial.println("pending_boot_health_check_failed");
+      return;
+    }
+  }
   runtimeReady = true;
 }
 

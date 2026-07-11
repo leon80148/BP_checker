@@ -11,6 +11,7 @@
 #include "DeviceSecurity.h"
 #include "BuildInfo.h"
 #include "MeasurementPolicy.h"
+#include "FirmwareUpdateRuntime.h"
 #include "WebAccessPolicy.h"
 #include "transports/MonitorTransport.h"
 
@@ -29,6 +30,7 @@ private:
   MonitorTransport* monitorTransport;
   MonotonicMillis64* uptimeClock;
   MeasurementPolicyStore* measurementPolicyStore;
+  FirmwareUpdateRuntime* firmwareUpdateRuntime;
   // 全域 ap_*/hostname 是 const char* 編譯期常數（bp_checker.ino），
   // 用單層 const char* 即可，省一層 indirection
   const char* hostname;
@@ -333,6 +335,10 @@ private:
                                bp_web::WebSurface::ADMIN_POLICY_NAV)) {
       navLink(html, "/measurement_policy", "量測政策", activePath);
     }
+    if (bp_web::surfaceVisible(server->currentRole(),
+                               bp_web::WebSurface::ADMIN_UPDATE_NAV)) {
+      navLink(html, "/firmware_update", "韌體更新", activePath);
+    }
     html += "</nav>";
     html += "<main id='main-content'>";
     return html;
@@ -353,6 +359,7 @@ public:
              MonitorTransport* monitorTransport,
              MonotonicMillis64* uptimeClock,
              MeasurementPolicyStore* measurementPolicyStore,
+             FirmwareUpdateRuntime* firmwareUpdateRuntime,
              const char* hostname, const char* ap_ssid)
     : server(server),
       deviceSecurity(deviceSecurity),
@@ -366,6 +373,7 @@ public:
       monitorTransport(monitorTransport),
       uptimeClock(uptimeClock),
       measurementPolicyStore(measurementPolicyStore),
+      firmwareUpdateRuntime(firmwareUpdateRuntime),
       hostname(hostname),
       ap_ssid(ap_ssid) {}
 
@@ -401,11 +409,43 @@ public:
                [this]() { this->handleMeasurementPolicyPage(); });
     server->on("/set_measurement_policy", HTTP_POST,
                [this]() { this->handleSetMeasurementPolicy(); });
+    server->on("/firmware_update", HTTP_GET,
+               [this]() { this->handleFirmwareUpdatePage(); });
+    server->on("/authorize_firmware", HTTP_POST,
+               [this]() { this->handleAuthorizeFirmware(); });
+    server->on("/install_firmware", HTTP_POST,
+               [this]() { this->handleInstallFirmware(); });
     server->on("/reset", HTTP_POST, [this]() { this->handleReset(); });
   }
 
 private:
   // 以下 handle* 都只在 setupRoutes 內以 lambda 連接到 route，無外部 caller。
+  bool hasExactFirmwareArguments() const {
+    static constexpr const char* kExpected[] = {
+      "version", "target", "source_sha", "sequence", "minimum_sequence",
+      "size", "sha256", "signature"
+    };
+    if (server->args() != static_cast<int>(sizeof(kExpected) / sizeof(kExpected[0]))) {
+      return false;
+    }
+    bool seen[sizeof(kExpected) / sizeof(kExpected[0])] = {};
+    for (int argument = 0; argument < server->args(); ++argument) {
+      const String name = server->argName(argument);
+      bool matched = false;
+      for (size_t expected = 0;
+           expected < sizeof(kExpected) / sizeof(kExpected[0]); ++expected) {
+        if (name == kExpected[expected] && !seen[expected]) {
+          seen[expected] = true;
+          matched = true;
+          break;
+        }
+      }
+      if (!matched) return false;
+    }
+    for (bool present : seen) if (!present) return false;
+    return true;
+  }
+
   void handleClaimPage() {
     const bool recovery = deviceSecurity != nullptr &&
       deviceSecurity->claimState() == DeviceClaimState::CLAIMED &&
@@ -706,6 +746,131 @@ private:
     html += "</section>";
     html += buildPageEnd();
     server->send(200, "text/html; charset=UTF-8", html);
+  }
+
+  void handleFirmwareUpdatePage() {
+    String html = buildPageStart("簽章韌體更新", "/firmware_update");
+    html += "<section class='panel form-shell'><h2>更新安全狀態</h2>";
+    if (firmwareUpdateRuntime == nullptr || !firmwareUpdateRuntime->ready()) {
+      html += "<p class='helper-text'>更新子系統未通過啟動自我檢查；禁止安裝。請聯絡維護人員。</p>";
+    } else if (!firmwareUpdateRuntime->trustAnchorConfigured()) {
+      html += "<p class='helper-text'>韌體簽章信任錨尚未設定；本裝置會拒絕所有更新。";
+      html += "請由授權發佈流程注入 P-256 公鑰後重新建置。</p>";
+    } else if (firmwareUpdateRuntime->pendingVerify()) {
+      html += "<p class='helper-text'>目前韌體仍在開機驗證階段；禁止疊加另一個更新。</p>";
+    } else if (firmwareUpdateRuntime->stagedForReboot()) {
+      html += "<p class='helper-text'>已驗證新映像並排定下次開機；請勿中斷電源。</p>";
+    } else if (bp_web::surfaceVisible(
+                 server->currentRole(),
+                 bp_web::WebSurface::FIRMWARE_UPDATE_CONTROL)) {
+      html += "<p class='helper-text'>只接受發佈系統產生的 canonical manifest、";
+      html += "P-256/SHA-256 簽章與對應 ESP32-S3 .bin。先驗證 metadata，再上傳映像。</p>";
+      html += "<form method='post' action='/authorize_firmware'>";
+      html += "<label class='field-label' for='fw-version'>語意版本</label>";
+      html += "<input id='fw-version' name='version' maxlength='32' required>";
+      html += "<input type='hidden' name='target' value='esp32:esp32:esp32s3'>";
+      html += "<label class='field-label' for='fw-source'>來源 commit SHA（40 位小寫 hex）</label>";
+      html += "<input id='fw-source' name='source_sha' minlength='40' maxlength='40' required>";
+      html += "<label class='field-label' for='fw-sequence'>發佈序號</label>";
+      html += "<input id='fw-sequence' name='sequence' inputmode='numeric' required>";
+      html += "<label class='field-label' for='fw-minimum'>最低已安裝序號</label>";
+      html += "<input id='fw-minimum' name='minimum_sequence' inputmode='numeric' required>";
+      html += "<label class='field-label' for='fw-size'>映像 byte 數</label>";
+      html += "<input id='fw-size' name='size' inputmode='numeric' required>";
+      html += "<label class='field-label' for='fw-sha'>映像 SHA-256（64 位小寫 hex）</label>";
+      html += "<input id='fw-sha' name='sha256' minlength='64' maxlength='64' required>";
+      html += "<label class='field-label' for='fw-signature'>Manifest P-256 簽章（DER Base64）</label>";
+      html += "<input id='fw-signature' name='signature' maxlength='108' required>";
+      html += "<button class='btn' type='submit'>驗證更新授權</button></form>";
+    }
+    html += "</section>";
+    html += buildPageEnd();
+    server->send(200, "text/html; charset=UTF-8", html);
+  }
+
+  void handleAuthorizeFirmware() {
+    if (firmwareUpdateRuntime == nullptr || !firmwareUpdateRuntime->ready() ||
+        !firmwareUpdateRuntime->trustAnchorConfigured()) {
+      server->send(503, "text/plain; charset=UTF-8",
+                   "韌體更新目前鎖定；未變更裝置");
+      return;
+    }
+    if (!hasExactFirmwareArguments()) {
+      server->send(400, "text/plain; charset=UTF-8",
+                   "更新 metadata 欄位不完整或含未知欄位");
+      return;
+    }
+    const String version = server->arg("version");
+    const String target = server->arg("target");
+    const String sourceSha = server->arg("source_sha");
+    const String sequence = server->arg("sequence");
+    const String minimum = server->arg("minimum_sequence");
+    const String artifactSize = server->arg("size");
+    const String artifactSha = server->arg("sha256");
+    String signatureText = server->arg("signature");
+    char canonical[bp_update::kManifestMaxBytes + 1] = {};
+    const int written = snprintf(
+      canonical, sizeof(canonical),
+      "schema=bp-update-v1\nversion=%s\ntarget=%s\nsource_sha=%s\n"
+      "sequence=%s\nminimum_sequence=%s\nsize=%s\nsha256=%s\n",
+      version.c_str(), target.c_str(), sourceSha.c_str(), sequence.c_str(),
+      minimum.c_str(), artifactSize.c_str(), artifactSha.c_str());
+    uint8_t signature[bp_update::kPendingSignatureMaxBytes] = {};
+    size_t signatureLength = 0;
+    const bool decoded = bp_web::decodeBase64Strict(
+      signatureText.c_str(), signatureText.length(), signature,
+      sizeof(signature), signatureLength);
+    secureWipeString(signatureText);
+    if (written <= 0 || static_cast<size_t>(written) >= sizeof(canonical) ||
+        !decoded) {
+      memset(canonical, 0, sizeof(canonical));
+      memset(signature, 0, sizeof(signature));
+      server->send(400, "text/plain; charset=UTF-8",
+                   "更新 metadata 或簽章格式無效");
+      return;
+    }
+    const bp_update::Result result = firmwareUpdateRuntime->authorizeUpdate(
+      canonical, static_cast<size_t>(written), signature, signatureLength);
+    memset(canonical, 0, sizeof(canonical));
+    memset(signature, 0, sizeof(signature));
+    if (result != bp_update::Result::OK) {
+      server->send(400, "text/plain; charset=UTF-8",
+                   "更新授權失敗：目標、序號、雜湊或簽章不符");
+      return;
+    }
+    String html = buildPageStart("更新授權已驗證", "/firmware_update");
+    html += "<section class='panel form-shell'><h2>選擇已簽章的韌體映像</h2>";
+    html += "<p class='helper-text'>檔案 byte 數與 SHA-256 必須完全符合剛驗證的 manifest。";
+    html += "上傳期間請保持裝置供電與同一個管理網路連線。</p>";
+    html += "<label class='field-label' for='firmware-bin'>ESP32-S3 .bin</label>";
+    html += "<input id='firmware-bin' type='file' accept='.bin,application/octet-stream'>";
+    html += "<button id='install-firmware' class='btn' type='button'>驗證並安裝</button>";
+    html += "<p id='firmware-status' role='status' aria-live='polite'></p></section>";
+    html += F("<script>document.getElementById('install-firmware').addEventListener('click',async()=>{"
+              "const input=document.getElementById('firmware-bin'),status=document.getElementById('firmware-status');"
+              "const file=input.files&&input.files[0];if(!file){status.textContent='請先選擇 .bin 檔案';return;}"
+              "status.textContent='正在驗證並寫入，請勿中斷電源…';"
+              "try{const response=await fetch('/install_firmware',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:file});"
+              "status.textContent=await response.text();if(!response.ok)throw new Error('install-failed');}"
+              "catch(error){status.textContent='安裝失敗；目前韌體未切換。請重新驗證 metadata 後再試。';}});</script>");
+    html += buildPageEnd();
+    server->send(200, "text/html; charset=UTF-8", html);
+  }
+
+  void handleInstallFirmware() {
+    if (firmwareUpdateRuntime == nullptr ||
+        !firmwareUpdateRuntime->stagedForReboot()) {
+      server->send(503, "text/plain; charset=UTF-8",
+                   "映像未通過完整簽章、雜湊與 OTA 驗證；未切換開機分割區");
+      return;
+    }
+    if (!server->deferAfterResponse(&WebHandler::restartDevice, nullptr)) {
+      server->send(503, "text/plain; charset=UTF-8",
+                   "映像已驗證；請依維護流程手動重新啟動以進行回滾保護驗證");
+      return;
+    }
+    server->send(200, "text/plain; charset=UTF-8",
+                 "映像已驗證並排定安全重啟；新韌體須通過啟動自我檢查才會確認");
   }
 
   void handleReset() {

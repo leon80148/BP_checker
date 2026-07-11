@@ -164,8 +164,8 @@ public:
       transportStatus(status),
       transport(monitor) {}
 
-  void setup() {
-    bool ok = transport->begin();
+  bool setup() {
+    const bool ok = transport->begin();
     *transportName = transport->name();
     syncTransportStatus();
     syncFramingContract();
@@ -177,6 +177,7 @@ public:
     if (!ok) {
       Serial.println("注意: 目前資料通道尚未可用，系統仍會保持 WiFi 與網頁服務可用。");
     }
+    return ok;
   }
 
   bool processIncomingData() {

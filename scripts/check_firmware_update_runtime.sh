@@ -43,6 +43,7 @@ done
 for token in \
   'verifyRunningImage(' \
   'constantTimeEqual(' \
+  'allowFirstInitialization && !_pendingVerify' \
   'if (!_ready) {' \
   'rollbackIfPending();'
 do
