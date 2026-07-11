@@ -224,3 +224,16 @@ artifact SHA-256 is
 Browser/HIL PASS now additionally requires a canonical raw-evidence manifest
 and detached signature whose public DER hash is pinned by reviewed config. The
 repository defaults are empty, so no unattested software-only evidence passes.
+
+Further review found HIL had not yet verified the signed release itself, soak
+fields were incomplete/weakly typed, and a self-generated P-256 key could make
+an internally consistent self-signed bundle. At `9933e18`, package finalization
+and HIL share `verify_signed_release.sh`; it validates the complete bundle and
+requires the DER SHA-256 in reviewed config. HIL attestation binds a unique run,
+current source/artifact/sequence, raw-log index, both hardware IDs, and typed
+24-hour heap/stack/reset/throughput/loss/reconnect/order/checksum metrics.
+
+The default release/browser/HIL trust hashes remain empty. A previously valid
+self-generated fixture now exits 1 with `signed bundle release key is not the
+reviewed trust anchor`. This is intentional fail-closed behavior, not missing
+positive evidence disguised as a pass.
