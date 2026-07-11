@@ -183,7 +183,7 @@ struct GateResult {
   AccessRole role = AccessRole::NONE;
   RequestInterface requestInterface = RequestInterface::UNKNOWN;
   bp_http::BodyMode bodyMode = bp_http::BodyMode::NONE;
-  uint16_t bodyCap = 0;
+  uint32_t bodyCap = 0;
 };
 
 inline HttpMethod gateMethod(bp_http::RequestMethod method) {
@@ -263,8 +263,26 @@ private:
       return result;
     }
     result.bodyCap = result.route->bodyCap;
-    result.bodyMode = result.route->bodyCap == 0
-      ? bp_http::BodyMode::NONE : bp_http::BodyMode::SMALL_FORM;
+    if (!routeBodyPolicyIsValid(*result.route)) {
+      result.status = 500;
+      result.reason = GateReason::UNKNOWN_ROUTE;
+      return result;
+    }
+    switch (result.route->bodyKind) {
+      case RouteBodyKind::NONE:
+        result.bodyMode = bp_http::BodyMode::NONE;
+        break;
+      case RouteBodyKind::FORM:
+        result.bodyMode = bp_http::BodyMode::SMALL_FORM;
+        break;
+      case RouteBodyKind::STREAM:
+        result.bodyMode = bp_http::BodyMode::STREAM;
+        break;
+      default:
+        result.status = 500;
+        result.reason = GateReason::UNKNOWN_ROUTE;
+        return result;
+    }
 
     if (security.availability != DeviceSecurityAvailability::READY) {
       result.status = 503;

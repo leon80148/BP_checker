@@ -2,6 +2,7 @@
 #define WEB_ACCESS_POLICY_H
 
 #include "DeviceSecurity.h"
+#include "BoundedHttpRequest.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -67,11 +68,18 @@ enum class AccessDecision : uint8_t {
   DENY_ROLE,
 };
 
+enum class RouteBodyKind : uint8_t {
+  NONE = 0,
+  FORM,
+  STREAM,
+};
+
 struct RoutePolicy {
   HttpMethod method;
   const char* path;
   AccessRole requiredRole;
-  uint16_t bodyCap;
+  uint32_t bodyCap;
+  RouteBodyKind bodyKind;
   bool mutation;
   bool noStore;
 };
@@ -81,24 +89,24 @@ struct RoutePolicy {
 // here. All responses can contain credentials, configuration, measurements,
 // or operational state, so every route requests Cache-Control: no-store.
 inline constexpr RoutePolicy kRoutePolicies[] = {
-  {HttpMethod::GET,  "/claim",              AccessRole::NONE,  0,   false, true},
-  {HttpMethod::POST, "/claim",              AccessRole::NONE,  96,  true,  true},
-  {HttpMethod::GET,  "/",                   AccessRole::STAFF, 0,   false, true},
-  {HttpMethod::GET,  "/data",               AccessRole::STAFF, 0,   false, true},
-  {HttpMethod::GET,  "/history",            AccessRole::STAFF, 0,   false, true},
-  {HttpMethod::GET,  "/export.csv",         AccessRole::STAFF, 0,   false, true},
-  {HttpMethod::GET,  "/api/history",        AccessRole::STAFF, 0,   false, true},
-  {HttpMethod::GET,  "/api/latest",         AccessRole::STAFF, 0,   false, true},
-  {HttpMethod::GET,  "/config",             AccessRole::ADMIN, 0,   false, true},
-  {HttpMethod::POST, "/configure",           AccessRole::ADMIN, 512, true,  true},
-  {HttpMethod::POST, "/clear_history",       AccessRole::ADMIN, 0,   true,  true},
-  {HttpMethod::GET,  "/bp_model",           AccessRole::ADMIN, 0,   false, true},
-  {HttpMethod::POST, "/set_bp_model",       AccessRole::ADMIN, 64,  true,  true},
-  {HttpMethod::GET,  "/security",           AccessRole::ADMIN, 0,   false, true},
-  {HttpMethod::POST, "/rotate_credentials", AccessRole::ADMIN, 64,  true,  true},
-  {HttpMethod::GET,  "/measurement_policy", AccessRole::ADMIN, 0,   false, true},
-  {HttpMethod::POST, "/set_measurement_policy", AccessRole::ADMIN, 512, true, true},
-  {HttpMethod::POST, "/reset",               AccessRole::ADMIN, 0,   true,  true},
+  {HttpMethod::GET, "/claim", AccessRole::NONE, 0, RouteBodyKind::NONE, false, true},
+  {HttpMethod::POST, "/claim", AccessRole::NONE, 96, RouteBodyKind::FORM, true, true},
+  {HttpMethod::GET, "/", AccessRole::STAFF, 0, RouteBodyKind::NONE, false, true},
+  {HttpMethod::GET, "/data", AccessRole::STAFF, 0, RouteBodyKind::NONE, false, true},
+  {HttpMethod::GET, "/history", AccessRole::STAFF, 0, RouteBodyKind::NONE, false, true},
+  {HttpMethod::GET, "/export.csv", AccessRole::STAFF, 0, RouteBodyKind::NONE, false, true},
+  {HttpMethod::GET, "/api/history", AccessRole::STAFF, 0, RouteBodyKind::NONE, false, true},
+  {HttpMethod::GET, "/api/latest", AccessRole::STAFF, 0, RouteBodyKind::NONE, false, true},
+  {HttpMethod::GET, "/config", AccessRole::ADMIN, 0, RouteBodyKind::NONE, false, true},
+  {HttpMethod::POST, "/configure", AccessRole::ADMIN, 512, RouteBodyKind::FORM, true, true},
+  {HttpMethod::POST, "/clear_history", AccessRole::ADMIN, 0, RouteBodyKind::NONE, true, true},
+  {HttpMethod::GET, "/bp_model", AccessRole::ADMIN, 0, RouteBodyKind::NONE, false, true},
+  {HttpMethod::POST, "/set_bp_model", AccessRole::ADMIN, 64, RouteBodyKind::FORM, true, true},
+  {HttpMethod::GET, "/security", AccessRole::ADMIN, 0, RouteBodyKind::NONE, false, true},
+  {HttpMethod::POST, "/rotate_credentials", AccessRole::ADMIN, 64, RouteBodyKind::FORM, true, true},
+  {HttpMethod::GET, "/measurement_policy", AccessRole::ADMIN, 0, RouteBodyKind::NONE, false, true},
+  {HttpMethod::POST, "/set_measurement_policy", AccessRole::ADMIN, 512, RouteBodyKind::FORM, true, true},
+  {HttpMethod::POST, "/reset", AccessRole::ADMIN, 0, RouteBodyKind::NONE, true, true},
 };
 
 inline constexpr size_t kRoutePolicyCount =
@@ -114,6 +122,21 @@ constexpr bool cStringEquals(const char* left, const char* right) {
   return left[index] == right[index];
 }
 
+constexpr bool routeBodyPolicyIsValid(const RoutePolicy& route) {
+  switch (route.bodyKind) {
+    case RouteBodyKind::NONE:
+      return route.bodyCap == 0;
+    case RouteBodyKind::FORM:
+      return route.method == HttpMethod::POST && route.bodyCap != 0 &&
+             route.bodyCap <= bp_http::BoundedHttpRequest::kSmallFormLimit;
+    case RouteBodyKind::STREAM:
+      return route.method == HttpMethod::POST && route.bodyCap != 0 &&
+             route.bodyCap <= bp_http::BoundedHttpRequest::kStreamBodyLimit;
+    default:
+      return false;
+  }
+}
+
 constexpr bool routeTableIsValid() {
   if (kRoutePolicyCount != 18) return false;
   for (size_t i = 0; i < kRoutePolicyCount; ++i) {
@@ -121,9 +144,9 @@ constexpr bool routeTableIsValid() {
     if (route.path == nullptr || route.path[0] != '/' || !route.noStore) {
       return false;
     }
+    if (!routeBodyPolicyIsValid(route)) return false;
     if (route.method == HttpMethod::OTHER) return false;
-    if (route.method == HttpMethod::GET &&
-        (route.bodyCap != 0 || route.mutation)) {
+    if (route.method == HttpMethod::GET && route.mutation) {
       return false;
     }
     if (route.method == HttpMethod::POST && !route.mutation) return false;

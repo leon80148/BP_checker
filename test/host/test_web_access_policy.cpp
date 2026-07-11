@@ -74,29 +74,30 @@ static void testCompileTimeRouteRegistry() {
     HttpMethod method;
     const char* path;
     AccessRole role;
-    uint16_t bodyCap;
+    uint32_t bodyCap;
+    RouteBodyKind bodyKind;
     bool mutation;
   };
 
   static const ExpectedRoute expected[] = {
-    {HttpMethod::GET,  "/claim",              AccessRole::NONE,  0,   false},
-    {HttpMethod::POST, "/claim",              AccessRole::NONE,  96,  true},
-    {HttpMethod::GET,  "/",                   AccessRole::STAFF, 0,   false},
-    {HttpMethod::GET,  "/data",               AccessRole::STAFF, 0,   false},
-    {HttpMethod::GET,  "/history",            AccessRole::STAFF, 0,   false},
-    {HttpMethod::GET,  "/export.csv",         AccessRole::STAFF, 0,   false},
-    {HttpMethod::GET,  "/api/history",        AccessRole::STAFF, 0,   false},
-    {HttpMethod::GET,  "/api/latest",         AccessRole::STAFF, 0,   false},
-    {HttpMethod::GET,  "/config",             AccessRole::ADMIN, 0,   false},
-    {HttpMethod::POST, "/configure",           AccessRole::ADMIN, 512, true},
-    {HttpMethod::POST, "/clear_history",       AccessRole::ADMIN, 0,   true},
-    {HttpMethod::GET,  "/bp_model",           AccessRole::ADMIN, 0,   false},
-    {HttpMethod::POST, "/set_bp_model",       AccessRole::ADMIN, 64,  true},
-    {HttpMethod::GET,  "/security",           AccessRole::ADMIN, 0,   false},
-    {HttpMethod::POST, "/rotate_credentials", AccessRole::ADMIN, 64,  true},
-    {HttpMethod::GET,  "/measurement_policy", AccessRole::ADMIN, 0,   false},
-    {HttpMethod::POST, "/set_measurement_policy", AccessRole::ADMIN, 512, true},
-    {HttpMethod::POST, "/reset",               AccessRole::ADMIN, 0,   true},
+    {HttpMethod::GET,  "/claim", AccessRole::NONE, 0, RouteBodyKind::NONE, false},
+    {HttpMethod::POST, "/claim", AccessRole::NONE, 96, RouteBodyKind::FORM, true},
+    {HttpMethod::GET,  "/", AccessRole::STAFF, 0, RouteBodyKind::NONE, false},
+    {HttpMethod::GET,  "/data", AccessRole::STAFF, 0, RouteBodyKind::NONE, false},
+    {HttpMethod::GET,  "/history", AccessRole::STAFF, 0, RouteBodyKind::NONE, false},
+    {HttpMethod::GET,  "/export.csv", AccessRole::STAFF, 0, RouteBodyKind::NONE, false},
+    {HttpMethod::GET,  "/api/history", AccessRole::STAFF, 0, RouteBodyKind::NONE, false},
+    {HttpMethod::GET,  "/api/latest", AccessRole::STAFF, 0, RouteBodyKind::NONE, false},
+    {HttpMethod::GET,  "/config", AccessRole::ADMIN, 0, RouteBodyKind::NONE, false},
+    {HttpMethod::POST, "/configure", AccessRole::ADMIN, 512, RouteBodyKind::FORM, true},
+    {HttpMethod::POST, "/clear_history", AccessRole::ADMIN, 0, RouteBodyKind::NONE, true},
+    {HttpMethod::GET,  "/bp_model", AccessRole::ADMIN, 0, RouteBodyKind::NONE, false},
+    {HttpMethod::POST, "/set_bp_model", AccessRole::ADMIN, 64, RouteBodyKind::FORM, true},
+    {HttpMethod::GET,  "/security", AccessRole::ADMIN, 0, RouteBodyKind::NONE, false},
+    {HttpMethod::POST, "/rotate_credentials", AccessRole::ADMIN, 64, RouteBodyKind::FORM, true},
+    {HttpMethod::GET,  "/measurement_policy", AccessRole::ADMIN, 0, RouteBodyKind::NONE, false},
+    {HttpMethod::POST, "/set_measurement_policy", AccessRole::ADMIN, 512, RouteBodyKind::FORM, true},
+    {HttpMethod::POST, "/reset", AccessRole::ADMIN, 0, RouteBodyKind::NONE, true},
   };
 
   CHECK_EQ(sizeof(expected) / sizeof(expected[0]), kRoutePolicyCount,
@@ -108,6 +109,8 @@ static void testCompileTimeRouteRegistry() {
     CHECK_EQ(static_cast<int>(policy->requiredRole),
              static_cast<int>(item.role), "route role metadata");
     CHECK_EQ(policy->bodyCap, item.bodyCap, "route body cap metadata");
+    CHECK_EQ(static_cast<int>(policy->bodyKind),
+             static_cast<int>(item.bodyKind), "route body kind metadata");
     CHECK_EQ(policy->mutation, item.mutation, "route mutation metadata");
     CHECK_TRUE(policy->noStore, "every product response is no-store");
   }
@@ -143,6 +146,25 @@ static void testCompileTimeRouteRegistry() {
   CHECK_TRUE(configure != nullptr &&
                worstCaseConfigureBody.size() <= configure->bodyCap,
              "maximum legal configure form fits route cap");
+
+  constexpr RoutePolicy validStream = {
+    HttpMethod::POST, "/stream", AccessRole::ADMIN, 1310720,
+    RouteBodyKind::STREAM, true, true
+  };
+  constexpr RoutePolicy invalidStreamZero = {
+    HttpMethod::POST, "/stream", AccessRole::ADMIN, 0,
+    RouteBodyKind::STREAM, true, true
+  };
+  constexpr RoutePolicy invalidNoneCap = {
+    HttpMethod::POST, "/none", AccessRole::ADMIN, 1,
+    RouteBodyKind::NONE, true, true
+  };
+  static_assert(routeBodyPolicyIsValid(validStream),
+                "bounded stream metadata is explicitly valid");
+  static_assert(!routeBodyPolicyIsValid(invalidStreamZero),
+                "zero-cap stream metadata is invalid");
+  static_assert(!routeBodyPolicyIsValid(invalidNoneCap),
+                "bodyless route cannot carry a cap");
 }
 
 static void testRoleToSurfacePolicy() {

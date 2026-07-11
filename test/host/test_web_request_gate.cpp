@@ -511,9 +511,12 @@ static void testEveryRegistryRoutePassesOneCentralGate() {
     CHECK_EQ(result.bodyCap, route.bodyCap,
              "gate propagates exact route body cap");
     CHECK_EQ(static_cast<int>(result.bodyMode),
-             static_cast<int>(route.bodyCap == 0
-               ? bp_http::BodyMode::NONE : bp_http::BodyMode::SMALL_FORM),
-             "gate derives bounded body mode from route metadata");
+             static_cast<int>(route.bodyKind == RouteBodyKind::NONE
+               ? bp_http::BodyMode::NONE
+               : route.bodyKind == RouteBodyKind::FORM
+                   ? bp_http::BodyMode::SMALL_FORM
+                   : bp_http::BodyMode::STREAM),
+             "gate maps the explicit bounded body kind");
   }
 }
 
