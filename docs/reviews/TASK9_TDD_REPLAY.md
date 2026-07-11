@@ -48,3 +48,9 @@ ran and failed 3/96 checks: failed-begin cleanup, destructor abort, and corrupt
 newest-slot rollback. At `f9d4deb`, the final focused suite passes 106 checks
 normally and under ASan/UBSan. Remove the disposable worktree with
 `git worktree remove --force /tmp/bp-task9-policy-review-red`.
+
+The ambiguous-reconciliation probe can be replayed by overlaying the final test
+from `b2bf543` onto `701de7d`. It fails 3/112 checks because the pre-fix store
+remains ready, authorizes a lower follow-on sequence, and overwrites the newer
+durable slot. At `b2bf543`, the focused normal and ASan/UBSan runs pass all 112
+checks; failed reconciliation locks the runtime object until explicit reload.
