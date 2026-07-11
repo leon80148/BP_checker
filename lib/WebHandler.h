@@ -596,8 +596,9 @@ private:
     html += policy.policyVersion;
     html += "</strong></li></ul></section>";
 
-    if (bp_web::surfaceVisible(server->currentRole(),
-                               bp_web::WebSurface::POLICY_UPDATE_CONTROL)) {
+    const bool canUpdatePolicy = bp_web::surfaceVisible(
+      server->currentRole(), bp_web::WebSurface::POLICY_UPDATE_CONTROL);
+    if (canUpdatePolicy && policy.policyVersion != UINT32_MAX) {
       html += "<section class='panel form-shell'><h2>更新政策</h2>";
       html += "<form method='post' action='/set_measurement_policy'>";
       html += "<label class='field-label' for='policy-name'>政策名稱（英數、空格、._-()）</label>";
@@ -637,6 +638,11 @@ private:
       html += policy.staleAfterMs / 1000U;
       html += "'><button class='btn' type='submit'>驗證並儲存政策</button>";
       html += "</form></section>";
+    } else if (canUpdatePolicy && policy.policyVersion == UINT32_MAX) {
+      html += "<section class='panel form-shell' role='status'>";
+      html += "<h2>政策版本已達上限</h2>";
+      html += "<p class='helper-text'>此政策無法再原地更新；請依受控維護流程建立新的政策儲存世代。</p>";
+      html += "</section>";
     }
     html += buildPageEnd();
     server->send(200, "text/html; charset=UTF-8", html);
@@ -1149,20 +1155,46 @@ private:
       html += "</form></section>";
     }
 
+    uint64_t initialReceiveAgeMs = 0;
+    const bool hasInitialReceiveAge =
+      recordManager->lastSuccessfulReceiveAgeMs(nowMs, initialReceiveAgeMs);
     html += "<script>let bpRevision='";
     appendUInt64(html, recordManager->getRevision());
     html += "';let bpPolicyVersion='";
     html += activePolicy().policyVersion;
+    html += "';let bpStaleAfterMs=";
+    html += activePolicy().staleAfterMs;
+    html += ";let bpLastReceiveAgeMs=";
+    if (hasInitialReceiveAge) {
+      html += "bpBoundedAge('";
+      appendUInt64(html, initialReceiveAgeMs);
+      html += "')";
+    } else {
+      html += "null";
+    }
     html += F(
-      "';let bpLastPollSuccess='尚無成功輪詢';"
+      ";let bpRequestDeadlineMs=8000;"
+      "let bpLastReceiveObservedAt=Date.now();"
+      "let bpLastSuccessfulResponseAt=Date.now();"
+      "let bpLastPollSuccess='頁面載入';"
+      "let bpPollInFlight=false,bpPollTimer=0,bpWatchdogTimer=0;"
+      "let bpDeadlineTimer=0,bpAbortController=null,bpTimersStopped=false;"
       "async function bpRefresh(){"
+        "if(bpTimersStopped||bpPollInFlight)return;"
+        "if(document.hidden){bpSchedulePoll();return;}"
+        "bpPollInFlight=true;"
+        "bpAbortController=new AbortController();"
+        "bpDeadlineTimer=setTimeout(()=>{if(bpAbortController)bpAbortController.abort();},bpRequestDeadlineMs);"
         "try{"
-        "if(document.hidden)return;"
-        "const r=await fetch('/api/latest',{cache:'no-store'});"
+        "const r=await fetch('/api/latest',{cache:'no-store',signal:bpAbortController.signal});"
         "if(!r.ok)throw new Error('poll-failure');"
         "const d=await r.json();"
         "if(String(d.policy_version)!==bpPolicyVersion){location.reload();return;}"
         "if(String(d.revision)!==bpRevision){location.reload();return;}"
+        "const now=Date.now();"
+        "bpLastSuccessfulResponseAt=now;"
+        "bpLastReceiveAgeMs=bpBoundedAge(d.last_successful_receive_age_ms);"
+        "bpLastReceiveObservedAt=now;"
         "bpLastPollSuccess=new Date().toLocaleTimeString('zh-TW',{hour12:false});"
         "const t=document.getElementById('conn-transport');if(t)t.textContent=d.transport_name;"
         "const s=document.getElementById('conn-status');if(s)s.textContent=d.transport_status;"
@@ -1170,7 +1202,7 @@ private:
         "const x=document.getElementById('diagnostic-state');if(x)x.textContent=d.diagnostic_state;"
         "const loss=document.getElementById('data-loss-count');if(loss)loss.textContent=d.data_loss_count;"
         "const reconnect=document.getElementById('reconnect-count');if(reconnect)reconnect.textContent=d.reconnect_count;"
-        "bpFreshness(d.freshness_state,d.freshness_label,d.last_successful_receive_age_ms);"
+        "bpFreshness(d.freshness_state,d.freshness_label,bpLastReceiveAgeMs,false);"
         "if(d.count>0){"
           "if(!document.getElementById('kpi-sys')){location.reload();return;}"
           "const v=d.valid===true;"
@@ -1182,16 +1214,49 @@ private:
         "}else if(document.getElementById('kpi-sys')){"
           "location.reload();return;"
         "}}catch(e){"
-          "const b=document.getElementById('measurement-freshness');"
-          "if(b){b.dataset.state='disconnected';b.dataset.reason='poll-failure';"
-          "b.textContent='資料更新中斷；畫面可能過期。最後成功更新：'+bpLastPollSuccess;}"
+          "bpConnectionProblem(e&&e.name==='AbortError'?'request-timeout':'poll-failure');"
+        "}finally{"
+          "clearTimeout(bpDeadlineTimer);bpDeadlineTimer=0;bpAbortController=null;"
+          "bpPollInFlight=false;bpSchedulePoll();"
         "}"
-        "finally{setTimeout(bpRefresh,3000);}"
       "}"
-      "function bpFreshness(state,label,age){"
+      "function bpSchedulePoll(){"
+        "if(bpTimersStopped)return;clearTimeout(bpPollTimer);"
+        "bpPollTimer=setTimeout(bpRefresh,3000);"
+      "}"
+      "function bpBoundedAge(value){"
+        "if(value===null||value===undefined)return null;const text=String(value);"
+        "if(!/^[0-9]+$/.test(text)||text.length>15)return bpStaleAfterMs;"
+        "const age=Number(text);"
+        "return Number.isSafeInteger(age)&&age>=0?Math.min(age,bpStaleAfterMs):bpStaleAfterMs;"
+      "}"
+      "function bpConnectionProblem(reason){"
+        "const b=document.getElementById('measurement-freshness');"
+        "if(b){b.dataset.state='disconnected';b.dataset.reason=reason;"
+        "b.textContent='資料更新中斷；畫面可能過期。請檢查資料通道並重新整理。最後成功更新：'+bpLastPollSuccess;}"
+        "const s=document.getElementById('conn-status');if(s)s.textContent='資料輪詢無回應';"
+      "}"
+      "function bpWatchdog(){"
+        "if(bpTimersStopped)return;const now=Date.now();"
+        "const responseAge=Math.max(0,now-bpLastSuccessfulResponseAt);"
+        "const receiveAge=bpLastReceiveAgeMs===null?null:"
+          "bpLastReceiveAgeMs+Math.max(0,now-bpLastReceiveObservedAt);"
+        "if(responseAge>=bpRequestDeadlineMs){"
+          "bpConnectionProblem('watchdog-timeout');return;"
+        "}"
+        "if(receiveAge!==null&&receiveAge>=bpStaleAfterMs){"
+          "bpFreshness('stale','已逾時',receiveAge,true);"
+        "}"
+      "}"
+      "function bpStopTimers(){"
+        "bpTimersStopped=true;clearTimeout(bpPollTimer);clearTimeout(bpDeadlineTimer);"
+        "clearInterval(bpWatchdogTimer);if(bpAbortController)bpAbortController.abort();"
+      "}"
+      "function bpFreshness(state,label,age,needsAction){"
         "const b=document.getElementById('measurement-freshness');if(!b)return;"
         "b.dataset.state=state;let suffix='';"
         "if(age!==null&&age!==undefined)suffix='；最後成功接收約 '+Math.floor(age/1000)+' 秒前';"
+        "if(needsAction)suffix+='；請重新量測並確認資料通道';"
         "b.textContent='資料新鮮度：'+label+suffix;"
       "}"
       "function bpKpi(iv,ip,v,state,label,ok){"
@@ -1205,6 +1270,8 @@ private:
         "if(a){a.textContent=v;a.className='kpi-value '+(review?'value-bad':'value-good');}"
         "if(b){b.textContent=label;b.className='state-pill '+(review?'state-alert':'state-ok');}"
       "}"
+      "bpWatchdogTimer=setInterval(bpWatchdog,1000);"
+      "window.addEventListener('pagehide',bpStopTimers,{once:true});"
       "bpRefresh();"
       "</script>"
     );

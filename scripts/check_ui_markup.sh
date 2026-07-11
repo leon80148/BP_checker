@@ -41,6 +41,50 @@ do
   }
 done
 
+for token in \
+  "AbortController" \
+  "signal:bpAbortController.signal" \
+  "bpRequestDeadlineMs=8000" \
+  "bpDeadlineTimer=setTimeout(()=>{if(bpAbortController)bpAbortController.abort();},bpRequestDeadlineMs)" \
+  "clearTimeout(bpDeadlineTimer)" \
+  "bpPollInFlight" \
+  "if(bpTimersStopped||bpPollInFlight)return;" \
+  "bpWatchdogTimer=setInterval(bpWatchdog,1000)" \
+  "clearInterval(bpWatchdogTimer)" \
+  "window.addEventListener('pagehide',bpStopTimers,{once:true})" \
+  "html += activePolicy().staleAfterMs;" \
+  "lastSuccessfulReceiveAgeMs(nowMs, initialReceiveAgeMs)" \
+  "responseAge>=bpRequestDeadlineMs" \
+  "receiveAge!==null&&receiveAge>=bpStaleAfterMs" \
+  "bpConnectionProblem('watchdog-timeout')" \
+  "bpPollInFlight=false;bpSchedulePoll()" \
+  "bpLastSuccessfulResponseAt" \
+  "bpLastReceiveAgeMs" \
+  "資料輪詢無回應" \
+  "請檢查資料通道並重新整理"
+do
+  grep -Fq -- "$token" "$FILE" || {
+    echo "missing bounded dashboard polling/watchdog contract: $token"
+    exit 1
+  }
+done
+
+if grep -Fq -- "responseAge>=Math.min(bpStaleAfterMs,bpRequestDeadlineMs)" "$FILE"; then
+  echo "measurement stale threshold must not shorten the API response deadline"
+  exit 1
+fi
+
+for token in \
+  "policy.policyVersion == UINT32_MAX" \
+  "政策版本已達上限" \
+  "無法再原地更新"
+do
+  grep -Fq -- "$token" "$FILE" || {
+    echo "missing policy-version exhaustion UI: $token"
+    exit 1
+  }
+done
+
 policy_snapshot_line=$(grep -nF "html += \"';let bpPolicyVersion='\";" "$FILE" \
   | head -1 | cut -d: -f1)
 policy_snapshot_value_line=$(grep -nF \
@@ -58,10 +102,18 @@ policy_reload_line=$(grep -nF \
   "$FILE" | head -1 | cut -d: -f1)
 poll_success_line=$(grep -nF "bpLastPollSuccess=new Date()" "$FILE" \
   | head -1 | cut -d: -f1)
+revision_reload_line=$(grep -nF \
+  "if(String(d.revision)!==bpRevision){location.reload();return;}" \
+  "$FILE" | head -1 | cut -d: -f1)
+response_success_line=$(grep -nF "bpLastSuccessfulResponseAt=now;" "$FILE" \
+  | head -1 | cut -d: -f1)
 if [[ -z "$latest_json_line" || -z "$policy_reload_line" || \
+      -z "$revision_reload_line" || -z "$response_success_line" || \
       -z "$poll_success_line" || ! "$latest_json_line" -lt "$policy_reload_line" || \
-      ! "$policy_reload_line" -lt "$poll_success_line" ]]; then
-  echo "policy version must trigger reload before dashboard state updates"
+      ! "$policy_reload_line" -lt "$revision_reload_line" || \
+      ! "$revision_reload_line" -lt "$response_success_line" || \
+      ! "$response_success_line" -lt "$poll_success_line" ]]; then
+  echo "policy and revision must trigger reload before dashboard state updates"
   exit 1
 fi
 
