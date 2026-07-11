@@ -153,3 +153,31 @@ bash scripts/run_host_tests.sh
 Expected GREEN: both focused binaries report `OK: 830 checks passed`, and every
 host executable passes. This commit intentionally stops before any Web server or
 OTA consumer integration.
+
+## Administrator Route and Boot Integration
+
+Before `7f89d6a`, the focused access registry expected 21 routes but found 18,
+and both `scripts/check_ui_markup.sh` and
+`scripts/check_security_runtime_integration.sh` exited 1 because no signed-update
+page, administrator mutations, stream callback, boot confirmation, or rollback
+call existed in the product sketch. The runtime contract separately exited 1 on
+the missing `allowFirstInitialization && !_pendingVerify` guard, proving that a
+pending image could otherwise treat missing anti-replay storage as first boot.
+
+After implementing the routes and lifecycle, the first pinned target compile
+remained RED: `decodeBase64Strict` was not namespace-qualified. The corrected
+GREEN at `7f89d6a` is reproducible with:
+
+```bash
+bash scripts/check_firmware_update_runtime.sh
+bash scripts/check_security_runtime_integration.sh
+bash scripts/check_ui_markup.sh
+bash scripts/run_host_tests.sh
+arduino-cli compile --profile esp32s3 --board-options USBMode=default \
+  --warnings all --clean .
+```
+
+The contracts pass, all host executables pass, and the fully linked firmware is
+1,156,036 bytes (88%) with 73,540 bytes of globals. This integration does not
+claim a successful signed installation, rollback drill, or HBP-9030 hardware
+acceptance; those require retained device evidence.
