@@ -98,6 +98,10 @@ The ESP32 runtime RED is `bash scripts/check_firmware_update_runtime.sh` at
 compiles at 1,137,180 bytes (86%) with 72,572 bytes globals. The runtime remains
 unreachable until the administrator routes and sketch lifecycle are integrated.
 
+The curve-pin review RED is `bash scripts/check_firmware_update_runtime.sh` on
+`37eb6c7`; it exits 1 on missing `MBEDTLS_ECP_DP_SECP256R1`. At `d8212c5`, the
+runtime checks the parsed EC group ID and the pinned target compiles.
+
 ## Bounded Binary HTTP Stream
 
 The production commit is `da220d1`. Its parent, `f43c855`, still rejects every
