@@ -573,12 +573,12 @@ private:
     }
     if (nameEquals(_line, colon, "origin")) {
       copyUniqueHeader(_view.origin, sizeof(_view.origin), _originSeen,
-                       value, valueLength, true);
+                       value, valueLength);
       return;
     }
     if (nameEquals(_line, colon, "referer")) {
       copyUniqueHeader(_view.referer, sizeof(_view.referer), _refererSeen,
-                       value, valueLength, true);
+                       value, valueLength);
       return;
     }
     if (nameEquals(_line, colon, "content-type")) {

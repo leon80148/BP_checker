@@ -239,6 +239,14 @@ static void testSensitiveHeadersAndMalformedLines() {
            static_cast<int>(RequestState::REJECT),
            "Expect rejected");
   CHECK_EQ(static_cast<int>(parseState(
+             "POST /claim HTTP/1.1\r\nHost: bp.local\r\nOrigin:   \r\n\r\n")),
+           static_cast<int>(RequestState::REJECT),
+           "empty Origin is not treated as absent");
+  CHECK_EQ(static_cast<int>(parseState(
+             "POST /claim HTTP/1.1\r\nHost: bp.local\r\nReferer:   \r\n\r\n")),
+           static_cast<int>(RequestState::REJECT),
+           "empty Referer is not treated as absent");
+  CHECK_EQ(static_cast<int>(parseState(
              std::string("GET / HTTP/1.1\r\nHost: bp.local\r\nX-Test: ok") +
              static_cast<char>(0x01) + "bad\r\n\r\n")),
            static_cast<int>(RequestState::REJECT),
