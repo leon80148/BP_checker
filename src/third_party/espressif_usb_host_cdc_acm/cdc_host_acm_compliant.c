@@ -39,7 +39,16 @@ static const char *TAG = "cdc_acm_compliant";
  */
 static esp_err_t send_cdc_request(cdc_dev_t *cdc_dev, bool in_transfer, cdc_request_code_t request, uint8_t *data, uint16_t data_len, uint16_t value)
 {
-    CDC_ACM_CHECK(cdc_dev->notif.intf_desc, ESP_ERR_NOT_SUPPORTED);
+    cdc_dev_t *admitted_dev = NULL;
+    esp_err_t ret = cdc_acm_acquire_device_operation(
+        (cdc_acm_dev_hdl_t)cdc_dev, &admitted_dev);
+    if (ret != ESP_OK) return ret;
+    if (admitted_dev->notif.intf_desc == NULL) {
+        ret = ESP_ERR_NOT_SUPPORTED;
+        goto release_operation;
+    }
+    const uint8_t interface_number =
+        admitted_dev->notif.intf_desc->bInterfaceNumber;
 
     uint8_t req_type = USB_BM_REQUEST_TYPE_TYPE_CLASS | USB_BM_REQUEST_TYPE_RECIP_INTERFACE;
     if (in_transfer) {
@@ -47,7 +56,13 @@ static esp_err_t send_cdc_request(cdc_dev_t *cdc_dev, bool in_transfer, cdc_requ
     } else {
         req_type |= USB_BM_REQUEST_TYPE_DIR_OUT;
     }
-    return cdc_acm_host_send_custom_request((cdc_acm_dev_hdl_t) cdc_dev, req_type, request, value, cdc_dev->notif.intf_desc->bInterfaceNumber, data_len, data);
+    ret = cdc_acm_host_send_custom_request((cdc_acm_dev_hdl_t)admitted_dev,
+                                           req_type, request, value,
+                                           interface_number, data_len, data);
+
+release_operation:
+    cdc_acm_release_device_operation(admitted_dev);
+    return ret;
 }
 
 esp_err_t acm_compliant_line_coding_get(cdc_acm_dev_hdl_t cdc_hdl, cdc_acm_line_coding_t *line_coding)

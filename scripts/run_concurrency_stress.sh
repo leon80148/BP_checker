@@ -18,12 +18,17 @@ if "$CXX" "${BASE[@]}" -fsanitize=thread -fno-omit-frame-pointer \
     -o "$TSAN" "$SOURCE" >"$TSAN_LOG" 2>&1; then
   if "$TSAN" >>"$TSAN_LOG" 2>&1; then
     echo "ThreadSanitizer stress passed."
-  elif grep -Eqi 'not supported|unsupported|unexpected memory mapping' "$TSAN_LOG"; then
+  elif grep -Eqi 'ThreadSanitizer (is )?not supported|unsupported VMA range|ThreadSanitizer: unexpected memory mapping' "$TSAN_LOG"; then
     echo "ThreadSanitizer runtime unavailable on this platform; normal stress passed."
   else
     cat "$TSAN_LOG" >&2
     exit 1
   fi
 else
-  echo "ThreadSanitizer compiler support unavailable; normal stress passed."
+  if grep -Eqi 'unsupported option.*fsanitize=thread|unknown argument.*fsanitize=thread|unrecognized command-line option.*fsanitize=thread|cannot find.*(clang_rt\.tsan|libtsan)|library not found.*tsan' "$TSAN_LOG"; then
+    echo "ThreadSanitizer compiler support unavailable; normal stress passed."
+  else
+    cat "$TSAN_LOG" >&2
+    exit 1
+  fi
 fi

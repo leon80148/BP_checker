@@ -14,10 +14,14 @@ esp_err_t cdc_acm_host_line_coding_set(cdc_acm_dev_hdl_t cdc_hdl, const cdc_acm_
 {
     ESP_RETURN_ON_FALSE(cdc_hdl, ESP_ERR_INVALID_ARG, TAG, "invalid CDC handle");
     ESP_RETURN_ON_FALSE(line_coding, ESP_ERR_INVALID_ARG, TAG, "line_coding can't be NULL");
-    esp_err_t ret = ESP_ERR_NOT_SUPPORTED;
-    if (cdc_hdl->intf_func.line_coding_set) {
-        ret = cdc_hdl->intf_func.line_coding_set(cdc_hdl, line_coding);
+    cdc_dev_t *cdc_dev = NULL;
+    esp_err_t ret = cdc_acm_acquire_device_operation(cdc_hdl, &cdc_dev);
+    if (ret != ESP_OK) return ret;
+    ret = ESP_ERR_NOT_SUPPORTED;
+    if (cdc_dev->intf_func.line_coding_set) {
+        ret = cdc_dev->intf_func.line_coding_set(cdc_hdl, line_coding);
     }
+    cdc_acm_release_device_operation(cdc_dev);
     return ret;
 }
 
@@ -25,29 +29,41 @@ esp_err_t cdc_acm_host_line_coding_get(cdc_acm_dev_hdl_t cdc_hdl, cdc_acm_line_c
 {
     ESP_RETURN_ON_FALSE(cdc_hdl, ESP_ERR_INVALID_ARG, TAG, "invalid CDC handle");
     ESP_RETURN_ON_FALSE(line_coding, ESP_ERR_INVALID_ARG, TAG, "line_coding can't be NULL");
-    esp_err_t ret = ESP_ERR_NOT_SUPPORTED;
-    if (cdc_hdl->intf_func.line_coding_get) {
-        ret = cdc_hdl->intf_func.line_coding_get(cdc_hdl, line_coding);
+    cdc_dev_t *cdc_dev = NULL;
+    esp_err_t ret = cdc_acm_acquire_device_operation(cdc_hdl, &cdc_dev);
+    if (ret != ESP_OK) return ret;
+    ret = ESP_ERR_NOT_SUPPORTED;
+    if (cdc_dev->intf_func.line_coding_get) {
+        ret = cdc_dev->intf_func.line_coding_get(cdc_hdl, line_coding);
     }
+    cdc_acm_release_device_operation(cdc_dev);
     return ret;
 }
 
 esp_err_t cdc_acm_host_set_control_line_state(cdc_acm_dev_hdl_t cdc_hdl, bool dtr, bool rts)
 {
     ESP_RETURN_ON_FALSE(cdc_hdl, ESP_ERR_INVALID_ARG, TAG, "invalid CDC handle");
-    esp_err_t ret = ESP_ERR_NOT_SUPPORTED;
-    if (cdc_hdl->intf_func.set_control_line_state) {
-        ret = cdc_hdl->intf_func.set_control_line_state(cdc_hdl, dtr, rts);
+    cdc_dev_t *cdc_dev = NULL;
+    esp_err_t ret = cdc_acm_acquire_device_operation(cdc_hdl, &cdc_dev);
+    if (ret != ESP_OK) return ret;
+    ret = ESP_ERR_NOT_SUPPORTED;
+    if (cdc_dev->intf_func.set_control_line_state) {
+        ret = cdc_dev->intf_func.set_control_line_state(cdc_hdl, dtr, rts);
     }
+    cdc_acm_release_device_operation(cdc_dev);
     return ret;
 }
 
 esp_err_t cdc_acm_host_send_break(cdc_acm_dev_hdl_t cdc_hdl, uint16_t duration_ms)
 {
     ESP_RETURN_ON_FALSE(cdc_hdl, ESP_ERR_INVALID_ARG, TAG, "invalid CDC handle");
-    esp_err_t ret = ESP_ERR_NOT_SUPPORTED;
-    if (cdc_hdl->intf_func.send_break) {
-        ret = cdc_hdl->intf_func.send_break(cdc_hdl, duration_ms);
+    cdc_dev_t *cdc_dev = NULL;
+    esp_err_t ret = cdc_acm_acquire_device_operation(cdc_hdl, &cdc_dev);
+    if (ret != ESP_OK) return ret;
+    ret = ESP_ERR_NOT_SUPPORTED;
+    if (cdc_dev->intf_func.send_break) {
+        ret = cdc_dev->intf_func.send_break(cdc_hdl, duration_ms);
     }
+    cdc_acm_release_device_operation(cdc_dev);
     return ret;
 }

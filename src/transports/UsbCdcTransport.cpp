@@ -1,4 +1,5 @@
 #include "../../lib/transports/UsbCdcTransport.h"
+#include "../../lib/transports/UsbCdcConcurrency.h"
 #include "../../lib/transports/UsbCdcState.h"
 
 #include <atomic>
@@ -7,6 +8,7 @@
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
+#include <freertos/semphr.h>
 #include <freertos/stream_buffer.h>
 #include <freertos/task.h>
 #include <soc/soc_caps.h>
@@ -22,8 +24,13 @@ namespace {
 constexpr size_t kRxUsableBytes = 1024;
 constexpr size_t kRxStorageBytes = kRxUsableBytes + 1;
 constexpr UBaseType_t kLifecycleQueueDepth = 16;
-constexpr UBaseType_t kOrderedQueueDepth = 12;
+constexpr size_t kOrderedChannelDepth = 12;
+constexpr size_t kCallbackContextCount = 2;
 constexpr uint32_t kOpenTimeoutMs = 20;
+constexpr size_t kTeardownEventAttempts = 50;
+constexpr size_t kCdcUninstallAttempts = 5;
+constexpr size_t kDestructorCloseAttempts = 3;
+constexpr size_t kCallbackQuiesceAttempts = 128;
 
 uint32_t saturatingAdd(uint32_t left, uint32_t right) {
   if (UINT32_MAX - left < right) return UINT32_MAX;
@@ -45,16 +52,20 @@ uint32_t atomicSaturatingIncrement(std::atomic<uint32_t>& target) {
 }
 }  // namespace
 
+class UsbCdcPortMutex {
+public:
+  void lock() { portENTER_CRITICAL(&_mux); }
+  void unlock() { portEXIT_CRITICAL(&_mux); }
+
+private:
+  portMUX_TYPE _mux = portMUX_INITIALIZER_UNLOCKED;
+};
+
 struct UsbCdcTransport::Impl {
   struct CallbackContext {
     Impl* owner = nullptr;
+    size_t slot = 0;
     uint32_t session = 0;
-  };
-
-  struct FallbackControl {
-    bool pending = false;
-    bool resumeProducer = false;
-    UsbCdcOrderedEvent event;
   };
 
   UsbCdcLifecycle lifecycle;
@@ -71,46 +82,42 @@ struct UsbCdcTransport::Impl {
     kLifecycleQueueDepth * sizeof(UsbCdcControlEvent)] = {};
   QueueHandle_t lifecycleQueue = nullptr;
 
-  StaticQueue_t orderedQueueState = {};
-  alignas(4) uint8_t orderedQueueStorage[
-    kOrderedQueueDepth * sizeof(UsbCdcOrderedEvent)] = {};
-  QueueHandle_t orderedQueue = nullptr;
+  UsbCdcSynchronizedState<UsbCdcPortMutex, kOrderedChannelDepth,
+                          kCallbackContextCount> shared;
+  CallbackContext callbackContexts[kCallbackContextCount];
+  int activeCallbackSlot = -1;
 
-  UsbCdcOrderedEvent orderedHead;
-  bool orderedHeadValid = false;
-  FallbackControl fallback;
-  portMUX_TYPE fallbackMux = portMUX_INITIALIZER_UNLOCKED;
-
-  std::atomic<uint32_t> producerSession{0};
-  std::atomic<uint32_t> producerEpoch{0};
   std::atomic<uint32_t> acceptedByteSequence{0};
-  std::atomic<uint32_t> lifetimeDroppedBytes{0};
-  std::atomic<uint32_t> lifetimeLossEpisodes{0};
-  std::atomic<uint32_t> lifetimeOverflowEpisodes{0};
   std::atomic<uint32_t> lifecycleQueueFailures{0};
-  std::atomic<bool> producerEnabled{false};
-  std::atomic<bool> producerQuarantined{false};
-  std::atomic<bool> overflowActive{false};
   std::atomic<bool> overflowMarkerPublished{false};
-  std::atomic<bool> terminalLossActive{false};
   std::atomic<bool> shutdownRequested{false};
-  std::atomic<bool> daemonStopped{true};
+  std::atomic<bool> teardownSafe{true};
+  std::atomic<UsbCdcDaemonPhase> daemonPhase{UsbCdcDaemonPhase::STOPPED};
 
-  CallbackContext callbackContext;
+  StaticSemaphore_t daemonExitState = {};
+  SemaphoreHandle_t daemonExit = nullptr;
   bool beginCalled = false;
   bool daemonTaskStarted = false;
   uint32_t activeSession = 0;
   uint32_t lastMillis32 = 0;
   uint64_t millisHigh = 0;
   bool millisInitialized = false;
+  bool terminalBoundaryPending = false;
+  UsbCdcTerminalBoundaryTracker terminalBoundary;
+  UsbCdcControlEvent pendingTerminalEvent;
+  UsbCdcOrderedType pendingTerminalType = UsbCdcOrderedType::STREAM_RESET;
+  UsbCdcDiagnosticsSnapshot currentDiagnostics;
+  uint32_t currentReconnectCount = 0;
 
 #if SOC_USB_OTG_SUPPORTED
-  TaskHandle_t daemonTaskHandle = nullptr;
   cdc_acm_dev_hdl_t cdcHandle = nullptr;
 #endif
 
   Impl() {
-    callbackContext.owner = this;
+    for (size_t i = 0; i < kCallbackContextCount; ++i) {
+      callbackContexts[i].owner = this;
+      callbackContexts[i].slot = i;
+    }
     cursor.beginSession(0, 0, 0);
   }
 
@@ -128,7 +135,7 @@ struct UsbCdcTransport::Impl {
 };
 
 #if SOC_USB_OTG_SUPPORTED
-static std::atomic<UsbCdcTransport*> gUsbCdcTransport{nullptr};
+static std::atomic<UsbCdcTransport::Impl*> gUsbCdcImpl{nullptr};
 
 // CALLBACK_POD_BEGIN lifecycle queue producer
 static bool enqueueLifecycle(UsbCdcTransport::Impl* impl,
@@ -148,42 +155,17 @@ static bool enqueueLifecycle(UsbCdcTransport::Impl* impl,
   if (xQueueSendToBack(impl->lifecycleQueue, &event, 0) == pdPASS) return true;
   if (critical) {
     atomicSaturatingIncrement(impl->lifecycleQueueFailures);
-    impl->producerQuarantined.store(true, std::memory_order_release);
-    impl->producerEnabled.store(false, std::memory_order_release);
+    impl->shared.quarantineTerminal(session);
   }
   return false;
 }
 // CALLBACK_POD_END lifecycle queue producer
 
-static void publishFallback(UsbCdcTransport::Impl* impl,
-                            const UsbCdcOrderedEvent& event,
-                            bool resumeProducer) {
-  portENTER_CRITICAL(&impl->fallbackMux);
-  if (!impl->fallback.pending) {
-    impl->fallback.pending = true;
-    impl->fallback.resumeProducer = resumeProducer;
-    impl->fallback.event = event;
-  } else {
-    if (event.type == UsbCdcOrderedType::STREAM_RESET) {
-      impl->fallback.event.type = UsbCdcOrderedType::STREAM_RESET;
-    }
-    impl->fallback.event.session = event.session;
-    impl->fallback.event.epoch = event.epoch;
-    impl->fallback.event.droppedBytes = saturatingAdd(
-      impl->fallback.event.droppedBytes, event.droppedBytes);
-    impl->fallback.resumeProducer =
-      impl->fallback.resumeProducer || resumeProducer;
-  }
-  portEXIT_CRITICAL(&impl->fallbackMux);
-  impl->producerQuarantined.store(true, std::memory_order_release);
-  impl->producerEnabled.store(false, std::memory_order_release);
-}
-
 // CALLBACK_POD_BEGIN ordered loss producer
-static bool enqueueOrdered(UsbCdcTransport::Impl* impl,
-                           UsbCdcOrderedType type, uint32_t session,
-                           uint32_t epoch, uint32_t droppedBytes,
-                           bool resumeProducer = false) {
+static UsbCdcOrderedPublishResult enqueueOrdered(
+    UsbCdcTransport::Impl* impl, UsbCdcOrderedType type, uint32_t session,
+    uint32_t epoch, uint32_t droppedBytes, bool resumeProducer = false,
+    bool quarantineBarrier = false) {
   UsbCdcOrderedEvent event;
   event.type = type;
   event.session = session;
@@ -191,53 +173,15 @@ static bool enqueueOrdered(UsbCdcTransport::Impl* impl,
   event.byteBoundary =
     impl->acceptedByteSequence.load(std::memory_order_acquire);
   event.droppedBytes = droppedBytes;
-  if (impl->orderedQueue != nullptr &&
-      xQueueSendToBack(impl->orderedQueue, &event, 0) == pdPASS) {
-    return true;
+  if (quarantineBarrier) {
+    return impl->shared.publishQuarantineBarrier(event);
   }
-  publishFallback(impl, event, resumeProducer);
-  return false;
+  return impl->shared.publish(event, resumeProducer);
 }
 // CALLBACK_POD_END ordered loss producer
 
-static uint32_t beginOverflowLoss(UsbCdcTransport::Impl* impl,
-                                  bool& newEpisode) {
-  bool expected = false;
-  newEpisode = impl->overflowActive.compare_exchange_strong(
-    expected, true, std::memory_order_acq_rel);
-  if (newEpisode) {
-    atomicSaturatingIncrement(impl->lifetimeOverflowEpisodes);
-    atomicSaturatingIncrement(impl->lifetimeLossEpisodes);
-    return atomicSaturatingIncrement(impl->producerEpoch);
-  }
-  return impl->producerEpoch.load(std::memory_order_acquire);
-}
-
 static uint32_t beginTerminalLoss(UsbCdcTransport::Impl* impl) {
-  bool expected = false;
-  if (impl->terminalLossActive.compare_exchange_strong(
-        expected, true, std::memory_order_acq_rel)) {
-    atomicSaturatingIncrement(impl->lifetimeLossEpisodes);
-    return atomicSaturatingIncrement(impl->producerEpoch);
-  }
-  return impl->producerEpoch.load(std::memory_order_acquire);
-}
-
-static bool peekFallback(UsbCdcTransport::Impl* impl,
-                         UsbCdcTransport::Impl::FallbackControl& out) {
-  portENTER_CRITICAL(&impl->fallbackMux);
-  bool pending = impl->fallback.pending;
-  if (pending) out = impl->fallback;
-  portEXIT_CRITICAL(&impl->fallbackMux);
-  return pending;
-}
-
-static void consumeFallback(UsbCdcTransport::Impl* impl) {
-  portENTER_CRITICAL(&impl->fallbackMux);
-  impl->fallback.pending = false;
-  impl->fallback.resumeProducer = false;
-  impl->fallback.event = UsbCdcOrderedEvent{};
-  portEXIT_CRITICAL(&impl->fallbackMux);
+  return impl->shared.beginTerminalLoss();
 }
 
 // CALLBACK_POD_BEGIN CDC data callback
@@ -248,14 +192,19 @@ static bool cdcDataCallback(const uint8_t* data, size_t dataLen, void* userArg) 
     return true;
   }
   auto* impl = context->owner;
-  if (!impl->producerEnabled.load(std::memory_order_acquire) ||
-      impl->producerQuarantined.load(std::memory_order_acquire)) {
-    if (!impl->producerQuarantined.load(std::memory_order_acquire)) {
-      beginTerminalLoss(impl);
-    }
-    atomicSaturatingAdd(impl->lifetimeDroppedBytes,
-                        dataLen > UINT32_MAX ? UINT32_MAX
-                                             : static_cast<uint32_t>(dataLen));
+  uint32_t rejectedBytes = dataLen > UINT32_MAX
+    ? UINT32_MAX : static_cast<uint32_t>(dataLen);
+  auto lease = impl->shared.acquireCallback(context->slot, context->session);
+  if (!lease) {
+    impl->shared.recordRejectedDrop(rejectedBytes);
+    return true;
+  }
+  uint32_t epoch = impl->shared.producerEpoch();
+  UsbCdcByteAdmission admission = UsbCdcByteAdmission::REJECTED_INACTIVE;
+  auto byteCommit = impl->shared.acquireByteCommitOrRecordDrop(
+    context->slot, context->session, epoch, rejectedBytes, admission);
+  if (!byteCommit) {
+    impl->shared.recordRejectedDrop(rejectedBytes);
     return true;
   }
 
@@ -266,24 +215,10 @@ static bool cdcDataCallback(const uint8_t* data, size_t dataLen, void* userArg) 
     size_t lostSize = dataLen - sent;
     uint32_t lost = lostSize > UINT32_MAX ? UINT32_MAX
                                           : static_cast<uint32_t>(lostSize);
-    atomicSaturatingAdd(impl->lifetimeDroppedBytes, lost);
-    bool newEpisode = false;
-    uint32_t epoch = beginOverflowLoss(impl, newEpisode);
-    if (newEpisode) {
-      bool published = enqueueOrdered(impl, UsbCdcOrderedType::DISCONTINUITY,
-                                      context->session, epoch, lost, true);
-      impl->overflowMarkerPublished.store(published ||
-        impl->producerQuarantined.load(std::memory_order_acquire),
-        std::memory_order_release);
-    }
-    enqueueLifecycle(impl, UsbCdcControlType::RX_OVERFLOW, 0, lost,
-                     context->session, false);
-  } else if (impl->overflowActive.load(std::memory_order_acquire) &&
-             impl->overflowMarkerPublished.load(std::memory_order_acquire)) {
-    impl->overflowActive.store(false, std::memory_order_release);
-    impl->overflowMarkerPublished.store(false, std::memory_order_release);
-    enqueueLifecycle(impl, UsbCdcControlType::RX_CAPACITY_RECOVERED, 0, 0,
-                     context->session, false);
+    epoch = impl->shared.beginOverflowLoss(lost);
+    impl->overflowMarkerPublished.store(true, std::memory_order_release);
+    enqueueOrdered(impl, UsbCdcOrderedType::DISCONTINUITY,
+                   context->session, epoch, lost, true, true);
   }
   return true;  // false makes the vendored driver append into its USB buffer.
 }
@@ -295,23 +230,33 @@ static void cdcEventCallback(const cdc_acm_host_dev_event_data_t* event,
   auto* context = static_cast<UsbCdcTransport::Impl::CallbackContext*>(userArg);
   if (context == nullptr || context->owner == nullptr || event == nullptr) return;
   auto* impl = context->owner;
+  bool terminalEvent = event->type == CDC_ACM_HOST_ERROR ||
+                       event->type == CDC_ACM_HOST_DEVICE_DISCONNECTED;
+  auto lease = terminalEvent
+    ? impl->shared.acquireTerminalCallback(context->slot, context->session)
+    : impl->shared.acquireCallback(context->slot, context->session);
+  if (!lease) return;
   switch (event->type) {
     case CDC_ACM_HOST_ERROR: {
-      impl->producerEnabled.store(false, std::memory_order_release);
-      uint32_t epoch = beginTerminalLoss(impl);
-      enqueueOrdered(impl, UsbCdcOrderedType::DISCONTINUITY, context->session,
-                     epoch, 0, false);
-      enqueueLifecycle(impl, UsbCdcControlType::TRANSFER_ERROR,
-                       event->data.error, 0, context->session, true);
+      if (impl->shared.noteTerminalFact(
+            context->session, UsbCdcTerminalFact::ERROR) ==
+          UsbCdcTerminalUpdate::IGNORED) break;
+      if (enqueueLifecycle(impl, UsbCdcControlType::TRANSFER_ERROR,
+                           event->data.error, 0, context->session, true)) {
+        impl->shared.acknowledgeTerminalFact(
+          context->session, UsbCdcTerminalFact::ERROR);
+      }
       break;
     }
     case CDC_ACM_HOST_DEVICE_DISCONNECTED: {
-      impl->producerEnabled.store(false, std::memory_order_release);
-      uint32_t epoch = beginTerminalLoss(impl);
-      enqueueOrdered(impl, UsbCdcOrderedType::STREAM_RESET, context->session,
-                     epoch, 0, false);
-      enqueueLifecycle(impl, UsbCdcControlType::DEVICE_DISCONNECTED, 0, 0,
-                       context->session, true);
+      if (impl->shared.noteTerminalFact(
+            context->session, UsbCdcTerminalFact::DISCONNECTED) ==
+          UsbCdcTerminalUpdate::IGNORED) break;
+      if (enqueueLifecycle(impl, UsbCdcControlType::DEVICE_DISCONNECTED, 0, 0,
+                           context->session, true)) {
+        impl->shared.acknowledgeTerminalFact(
+          context->session, UsbCdcTerminalFact::DISCONNECTED);
+      }
       break;
     }
     case CDC_ACM_HOST_SERIAL_STATE:
@@ -338,14 +283,74 @@ static uint32_t daemonRetryDelay(uint8_t attempt) {
 }
 
 static bool daemonWait(UsbCdcTransport::Impl* impl, uint32_t delayMs) {
-  ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(delayMs));
+  uint32_t remaining = delayMs;
+  while (remaining > 0 &&
+         !impl->shutdownRequested.load(std::memory_order_acquire)) {
+    uint32_t slice = remaining > 100 ? 100 : remaining;
+    vTaskDelay(pdMS_TO_TICKS(slice));
+    remaining -= slice;
+  }
   return !impl->shutdownRequested.load(std::memory_order_acquire);
 }
 
+static void noteTeardownFlags(UsbCdcTeardownTracker& tracker,
+                              uint32_t eventFlags) {
+  if ((eventFlags & USB_HOST_LIB_EVENT_FLAGS_NO_CLIENTS) != 0) {
+    tracker.noteNoClients();
+  }
+  if ((eventFlags & USB_HOST_LIB_EVENT_FLAGS_ALL_FREE) != 0) {
+    tracker.noteAllFree();
+  }
+}
+
+static bool pumpHostTeardownEvent(UsbCdcTeardownTracker& tracker) {
+  uint32_t eventFlags = 0;
+  esp_err_t result = usb_host_lib_handle_events(pdMS_TO_TICKS(100),
+                                                 &eventFlags);
+  if (result == ESP_OK) noteTeardownFlags(tracker, eventFlags);
+  return result == ESP_OK || result == ESP_ERR_TIMEOUT;
+}
+
+static bool teardownUsbHost(bool driverInstalled) {
+  UsbCdcTeardownTracker tracker(driverInstalled);
+  if (driverInstalled) {
+    esp_err_t result = ESP_ERR_NOT_FINISHED;
+    for (size_t attempt = 0;
+         attempt < kCdcUninstallAttempts && result != ESP_OK; ++attempt) {
+      result = cdc_acm_host_uninstall();
+      if (result != ESP_OK && result != ESP_ERR_NOT_FINISHED) return false;
+      if (result == ESP_ERR_NOT_FINISHED) vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    if (result != ESP_OK) return false;
+    tracker.noteCdcUninstalled();
+    for (size_t attempt = 0;
+         attempt < kTeardownEventAttempts && !tracker.mayFreeDevices();
+         ++attempt) {
+      if (!pumpHostTeardownEvent(tracker)) return false;
+    }
+    if (!tracker.mayFreeDevices()) return false;
+  }
+
+  esp_err_t freeResult = usb_host_device_free_all();
+  if (freeResult != ESP_OK && freeResult != ESP_ERR_NOT_FINISHED) return false;
+  tracker.noteFreeAllRequested(freeResult == ESP_OK);
+  for (size_t attempt = 0;
+       attempt < kTeardownEventAttempts && !tracker.mayUninstallHost();
+       ++attempt) {
+    if (!pumpHostTeardownEvent(tracker)) return false;
+  }
+  if (!tracker.mayUninstallHost()) return false;
+
+  esp_err_t uninstallResult = usb_host_uninstall();
+  if (uninstallResult != ESP_OK) return false;
+  tracker.noteHostUninstalled();
+  return tracker.complete();
+}
+
 static void usbHostDaemonTask(void* arg) {
-  auto* self = static_cast<UsbCdcTransport*>(arg);
-  auto* impl = self->impl;
-  impl->daemonStopped.store(false, std::memory_order_release);
+  auto* impl = static_cast<UsbCdcTransport::Impl*>(arg);
+  impl->daemonPhase.store(UsbCdcDaemonPhase::RUNNING,
+                          std::memory_order_release);
   uint8_t retryAttempt = 0;
 
   while (!impl->shutdownRequested.load(std::memory_order_acquire)) {
@@ -369,11 +374,11 @@ static void usbHostDaemonTask(void* arg) {
       .xCoreID = 0,
       .new_dev_cb = [](usb_device_handle_t) {
         // CALLBACK_POD_BEGIN new-device callback
-        UsbCdcTransport* transport =
-          gUsbCdcTransport.load(std::memory_order_acquire);
-        if (transport != nullptr && transport->impl != nullptr) {
-          enqueueLifecycle(transport->impl,
-                           UsbCdcControlType::DEVICE_ATTACHED, 0, 0, 0, true);
+        UsbCdcTransport::Impl* active =
+          gUsbCdcImpl.load(std::memory_order_acquire);
+        if (active != nullptr) {
+          enqueueLifecycle(active, UsbCdcControlType::DEVICE_ATTACHED,
+                           0, 0, 0, true);
         }
         // CALLBACK_POD_END new-device callback
       },
@@ -382,7 +387,10 @@ static void usbHostDaemonTask(void* arg) {
     result = cdc_acm_host_install(&driverConfig);
     if (result != ESP_OK) {
       enqueueLifecycle(impl, UsbCdcControlType::DRIVER_INSTALL_FAILED, result);
-      usb_host_uninstall();
+      if (!teardownUsbHost(false)) {
+        impl->teardownSafe.store(false, std::memory_order_release);
+        break;
+      }
       if (retryAttempt < UINT8_MAX) retryAttempt++;
       if (!daemonWait(impl, daemonRetryDelay(retryAttempt))) break;
       continue;
@@ -399,13 +407,17 @@ static void usbHostDaemonTask(void* arg) {
       }
     }
 
-    cdc_acm_host_uninstall();
-    usb_host_device_free_all();
-    usb_host_uninstall();
+    if (!teardownUsbHost(true)) {
+      impl->teardownSafe.store(false, std::memory_order_release);
+    }
     break;
   }
 
-  impl->daemonStopped.store(true, std::memory_order_release);
+  if (impl->daemonExit != nullptr) xSemaphoreGive(impl->daemonExit);
+  // This is the daemon's final access to Impl. The destructor waits for both
+  // the semaphore and this release-store before freeing the backing storage.
+  impl->daemonPhase.store(UsbCdcDaemonPhase::STOPPED,
+                          std::memory_order_release);
   vTaskDelete(nullptr);
 }
 #endif  // SOC_USB_OTG_SUPPORTED
@@ -414,36 +426,76 @@ UsbCdcTransport::UsbCdcTransport() : impl(new Impl()) {}
 
 UsbCdcTransport::~UsbCdcTransport() {
   if (impl == nullptr) return;
-  impl->producerEnabled.store(false, std::memory_order_release);
-  impl->producerQuarantined.store(true, std::memory_order_release);
 #if SOC_USB_OTG_SUPPORTED
-  UsbCdcTransport* expected = this;
-  gUsbCdcTransport.compare_exchange_strong(expected, nullptr,
-                                            std::memory_order_acq_rel);
+  impl->shared.quarantineProducer(impl->activeSession);
+  Impl* expected = impl;
+  gUsbCdcImpl.compare_exchange_strong(expected, nullptr,
+                                       std::memory_order_acq_rel);
+  size_t closeAttempts = 0;
+  while (impl->cdcHandle != nullptr &&
+         closeAttempts < kDestructorCloseAttempts) {
+    closeAttempts++;
+    size_t slot = impl->activeCallbackSlot < 0
+      ? kCallbackContextCount
+      : static_cast<size_t>(impl->activeCallbackSlot);
+    if (slot < kCallbackContextCount) {
+      impl->shared.retireContext(slot, impl->activeSession);
+    }
+    esp_err_t result = cdc_acm_host_close(impl->cdcHandle);
+    if (result == ESP_OK) {
+      impl->cdcHandle = nullptr;
+      if (slot < kCallbackContextCount) {
+        UsbCdcCloseCompletion completion = impl->shared.finishClose(
+          slot, impl->activeSession, true);
+        while (completion == UsbCdcCloseCompletion::CALLBACKS_ACTIVE) {
+          vTaskDelay(pdMS_TO_TICKS(1));
+          completion = impl->shared.finishClose(
+            slot, impl->activeSession, true);
+        }
+        if (completion == UsbCdcCloseCompletion::RELEASED) {
+          impl->callbackContexts[slot].session = 0;
+          impl->activeCallbackSlot = -1;
+        }
+      }
+    } else {
+      if (slot < kCallbackContextCount) {
+        impl->shared.finishClose(slot, impl->activeSession, false);
+      }
+      vTaskDelay(pdMS_TO_TICKS(10));
+    }
+  }
   if (impl->cdcHandle != nullptr) {
-    cdc_acm_dev_hdl_t handle = impl->cdcHandle;
-    impl->cdcHandle = nullptr;
-    cdc_acm_host_close(handle);
+    impl->teardownSafe.store(false, std::memory_order_release);
   }
   impl->shutdownRequested.store(true, std::memory_order_release);
-  if (impl->daemonTaskHandle != nullptr) xTaskNotifyGive(impl->daemonTaskHandle);
-  for (int i = 0; i < 100 &&
-                  !impl->daemonStopped.load(std::memory_order_acquire); ++i) {
-    vTaskDelay(pdMS_TO_TICKS(10));
+  UsbCdcDaemonPhase phase = impl->daemonPhase.load(std::memory_order_acquire);
+  if (phase != UsbCdcDaemonPhase::STOPPED) {
+    impl->daemonPhase.store(UsbCdcDaemonPhase::STOPPING,
+                            std::memory_order_release);
+    usb_host_lib_unblock();
   }
-  if (!impl->daemonStopped.load(std::memory_order_acquire)) {
-    // The task still references Impl. Leak safely rather than create a UAF.
+  if (impl->daemonTaskStarted && impl->daemonExit != nullptr) {
+    xSemaphoreTake(impl->daemonExit, portMAX_DELAY);
+    while (impl->daemonPhase.load(std::memory_order_acquire) !=
+           UsbCdcDaemonPhase::STOPPED) {
+      taskYIELD();
+    }
+  }
+  if (!impl->teardownSafe.load(std::memory_order_acquire)) {
+    // A driver/host task may still own callback pointers. Retain the complete
+    // backing object instead of hanging teardown or creating a use-after-free.
     impl = nullptr;
     return;
   }
 #endif
   memset(impl->rxStreamStorage, 0, sizeof(impl->rxStreamStorage));
-  memset(impl->orderedQueueStorage, 0, sizeof(impl->orderedQueueStorage));
+  impl->shared.clearOrdered();
   delete impl;
   impl = nullptr;
 }
 
 bool UsbCdcTransport::begin() {
+  if (impl == nullptr || impl->beginCalled) return false;
   impl->beginCalled = true;
   impl->rxStream = xStreamBufferCreateStatic(
     sizeof(impl->rxStreamStorage), 1, impl->rxStreamStorage,
@@ -451,11 +503,9 @@ bool UsbCdcTransport::begin() {
   impl->lifecycleQueue = xQueueCreateStatic(
     kLifecycleQueueDepth, sizeof(UsbCdcControlEvent),
     impl->lifecycleQueueStorage, &impl->lifecycleQueueState);
-  impl->orderedQueue = xQueueCreateStatic(
-    kOrderedQueueDepth, sizeof(UsbCdcOrderedEvent),
-    impl->orderedQueueStorage, &impl->orderedQueueState);
+  impl->daemonExit = xSemaphoreCreateBinaryStatic(&impl->daemonExitState);
   if (impl->rxStream == nullptr || impl->lifecycleQueue == nullptr ||
-      impl->orderedQueue == nullptr) {
+      impl->daemonExit == nullptr) {
     impl->currentState = TRANSPORT_STATE_ERROR;
     impl->currentDetail = "USB queue allocation failed";
     return false;
@@ -470,14 +520,25 @@ bool UsbCdcTransport::begin() {
   impl->currentDetail = "SOC_USB_OTG_SUPPORTED is not available on this target";
   return false;
 #else
-  gUsbCdcTransport.store(this, std::memory_order_release);
+  Impl* expected = nullptr;
+  if (!gUsbCdcImpl.compare_exchange_strong(expected, impl,
+                                            std::memory_order_acq_rel)) {
+    impl->currentState = TRANSPORT_STATE_ERROR;
+    impl->currentDetail = "Another USB CDC transport is already active";
+    return false;
+  }
+  impl->daemonPhase.store(UsbCdcDaemonPhase::STARTING,
+                          std::memory_order_release);
   BaseType_t created = xTaskCreatePinnedToCore(
-    usbHostDaemonTask, "usb_host_daemon", 6144, this, 20,
-    &impl->daemonTaskHandle, 0);
+    usbHostDaemonTask, "usb_host_daemon", 6144, impl, 20, nullptr, 0);
   if (created != pdPASS) {
+    impl->daemonPhase.store(UsbCdcDaemonPhase::STOPPED,
+                            std::memory_order_release);
     impl->currentState = TRANSPORT_STATE_ERROR;
     impl->currentDetail = "Failed to create USB host daemon task";
-    gUsbCdcTransport.store(nullptr, std::memory_order_release);
+    expected = impl;
+    gUsbCdcImpl.compare_exchange_strong(expected, nullptr,
+                                         std::memory_order_acq_rel);
     return false;
   }
   impl->daemonTaskStarted = true;
@@ -495,6 +556,7 @@ static bool sessionScoped(UsbCdcControlType type) {
     case UsbCdcControlType::RX_CAPACITY_RECOVERED:
     case UsbCdcControlType::TRANSFER_ERROR:
     case UsbCdcControlType::DEVICE_DISCONNECTED:
+    case UsbCdcControlType::HANDLE_CLOSE_FAILED:
       return true;
     default:
       return false;
@@ -531,6 +593,10 @@ static void applyLifecycleEvent(UsbCdcTransport::Impl* impl,
     case UsbCdcControlType::DEVICE_DISCONNECTED:
       impl->currentDetail = "CDC device disconnected";
       break;
+    case UsbCdcControlType::HANDLE_CLOSE_FAILED:
+      impl->currentDetail = "cdc_acm_host_close failed; ownership retained: ";
+      impl->currentDetail += event.code;
+      break;
     case UsbCdcControlType::RX_OVERFLOW:
       impl->currentDetail = "CDC RX overflow; frame boundary recovery active";
       break;
@@ -542,10 +608,105 @@ static void applyLifecycleEvent(UsbCdcTransport::Impl* impl,
   }
 }
 
+static bool terminalOrderedType(UsbCdcControlType type,
+                                UsbCdcOrderedType& orderedType) {
+  switch (type) {
+    case UsbCdcControlType::TRANSFER_ERROR:
+      orderedType = UsbCdcOrderedType::DISCONTINUITY;
+      return true;
+    case UsbCdcControlType::CONFIG_FAILED:
+    case UsbCdcControlType::DEVICE_DISCONNECTED:
+    case UsbCdcControlType::CONTROL_QUEUE_OVERFLOW:
+      orderedType = UsbCdcOrderedType::STREAM_RESET;
+      return true;
+    default:
+      return false;
+  }
+}
+
+static bool quiesceTerminalCallbacks(UsbCdcTransport::Impl* impl,
+                                     uint32_t session) {
+  if (impl->activeCallbackSlot < 0) return true;
+  size_t slot = static_cast<size_t>(impl->activeCallbackSlot);
+  if (!impl->shared.contextMatches(slot, session)) return true;
+  impl->shared.retireContext(slot, session);
+  for (size_t attempt = 0; attempt < kCallbackQuiesceAttempts; ++attempt) {
+    if (impl->shared.callbacksQuiescent(slot, session)) return true;
+    taskYIELD();
+  }
+  return impl->shared.callbacksQuiescent(slot, session);
+}
+
+static bool publishTerminalBoundary(UsbCdcTransport::Impl* impl,
+                                    uint32_t session,
+                                    UsbCdcOrderedType orderedType) {
+  impl->shared.quarantineTerminal(session);
+  if (!impl->terminalBoundary.needsPublish(orderedType)) return true;
+  if (!quiesceTerminalCallbacks(impl, session)) return false;
+  uint32_t epoch = beginTerminalLoss(impl);
+  enqueueOrdered(impl, orderedType, session, epoch, 0, false);
+  impl->terminalBoundary.notePublished(orderedType);
+  return true;
+}
+
+static bool applyTerminalEventOrDefer(UsbCdcTransport::Impl* impl,
+                                      const UsbCdcControlEvent& event,
+                                      uint64_t nowMs) {
+  UsbCdcControlEvent normalized = event;
+  normalized.session = usbCdcEffectiveControlSession(
+    normalized.type, normalized.session, impl->activeSession);
+  if (sessionScoped(normalized.type) &&
+      normalized.session != impl->activeSession) {
+    return true;
+  }
+  UsbCdcOrderedType orderedType;
+  if (!terminalOrderedType(normalized.type, orderedType)) {
+    applyLifecycleEvent(impl, normalized, nowMs);
+    return true;
+  }
+  if (!publishTerminalBoundary(impl, normalized.session, orderedType)) {
+    impl->pendingTerminalEvent = normalized;
+    impl->pendingTerminalType = orderedType;
+    impl->terminalBoundaryPending = true;
+    return false;
+  }
+  applyLifecycleEvent(impl, normalized, nowMs);
+  return true;
+}
+
+static bool replayPendingTerminalFact(UsbCdcTransport::Impl* impl,
+                                      uint64_t nowMs) {
+  UsbCdcTerminalFact fact =
+    impl->shared.pendingTerminalFact(impl->activeSession);
+  if (fact == UsbCdcTerminalFact::NONE) return true;
+
+  UsbCdcControlEvent replay;
+  replay.session = impl->activeSession;
+  if (fact == UsbCdcTerminalFact::DISCONNECTED) {
+    replay.type = UsbCdcControlType::DEVICE_DISCONNECTED;
+  } else {
+    replay.type = UsbCdcControlType::TRANSFER_ERROR;
+    replay.code = ESP_FAIL;
+  }
+  if (!applyTerminalEventOrDefer(impl, replay, nowMs)) return false;
+  impl->shared.acknowledgeTerminalFact(impl->activeSession, fact);
+  return true;
+}
+
 static void drainLifecycleQueue(UsbCdcTransport::Impl* impl, uint64_t nowMs) {
+  if (impl->terminalBoundaryPending) {
+    if (!publishTerminalBoundary(impl, impl->pendingTerminalEvent.session,
+                                 impl->pendingTerminalType)) {
+      return;
+    }
+    UsbCdcControlEvent pending = impl->pendingTerminalEvent;
+    impl->terminalBoundaryPending = false;
+    applyLifecycleEvent(impl, pending, nowMs);
+  }
+
   UsbCdcControlEvent event;
   while (xQueueReceive(impl->lifecycleQueue, &event, 0) == pdPASS) {
-    applyLifecycleEvent(impl, event, nowMs);
+    if (!applyTerminalEventOrDefer(impl, event, nowMs)) return;
   }
   uint32_t failures = impl->lifecycleQueueFailures.exchange(
     0, std::memory_order_acq_rel);
@@ -554,37 +715,120 @@ static void drainLifecycleQueue(UsbCdcTransport::Impl* impl, uint64_t nowMs) {
     failure.type = UsbCdcControlType::CONTROL_QUEUE_OVERFLOW;
     failure.code = static_cast<int32_t>(failures);
     failure.session = impl->activeSession;
-    applyLifecycleEvent(impl, failure, nowMs);
-    uint32_t epoch = beginTerminalLoss(impl);
-    enqueueOrdered(impl, UsbCdcOrderedType::STREAM_RESET,
-                   impl->activeSession, epoch, 0, false);
+    impl->shared.quarantineTerminal(impl->activeSession);
+    if (!applyTerminalEventOrDefer(impl, failure, nowMs)) return;
+  }
+  (void)replayPendingTerminalFact(impl, nowMs);
+}
+
+static void retireFailedOpenCallbackContext(UsbCdcTransport::Impl* impl) {
+  if (impl->activeCallbackSlot < 0) return;
+  size_t slot = static_cast<size_t>(impl->activeCallbackSlot);
+  uint32_t session = impl->callbackContexts[slot].session;
+  if (session != 0) {
+    impl->shared.retireContext(slot, session);
+  }
+  // Open failure guarantees the driver has disabled future callback
+  // snapshots. Detach this slot from new opens, but keep its immutable
+  // session until every already-snapshotted callback lease drains.
+  impl->activeCallbackSlot = -1;
+}
+
+static void reapRetiredCallbackContexts(UsbCdcTransport::Impl* impl) {
+  for (size_t slot = 0; slot < kCallbackContextCount; ++slot) {
+    if (impl->activeCallbackSlot == static_cast<int>(slot)) continue;
+    uint32_t session = impl->callbackContexts[slot].session;
+    if (session != 0 && impl->shared.abandonContext(slot, session)) {
+      impl->callbackContexts[slot].session = 0;
+    }
   }
 }
 
-static void closeOwnedHandle(UsbCdcTransport::Impl* impl, uint64_t nowMs) {
-  if (!impl->lifecycle.takeCloseRequest()) return;
+static bool closeOwnedHandle(UsbCdcTransport::Impl* impl, uint64_t nowMs) {
+  if (!impl->lifecycle.takeCloseRequest()) return false;
   cdc_acm_dev_hdl_t handle = impl->cdcHandle;
-  impl->cdcHandle = nullptr;
-  if (handle != nullptr) cdc_acm_host_close(handle);
-  UsbCdcControlEvent closed;
-  closed.type = UsbCdcControlType::HANDLE_CLOSED;
-  closed.session = impl->activeSession;
-  impl->lifecycle.apply(closed, nowMs);
+  size_t slot = impl->activeCallbackSlot < 0
+    ? kCallbackContextCount
+    : static_cast<size_t>(impl->activeCallbackSlot);
+  if (slot < kCallbackContextCount) {
+    impl->shared.retireContext(slot, impl->activeSession);
+  }
+  esp_err_t result = handle == nullptr ? ESP_ERR_INVALID_STATE
+                                        : cdc_acm_host_close(handle);
+  UsbCdcControlEvent outcome;
+  outcome.session = impl->activeSession;
+  if (result == ESP_OK) {
+    impl->cdcHandle = nullptr;
+    UsbCdcCloseCompletion completion = slot < kCallbackContextCount
+      ? impl->shared.finishClose(slot, impl->activeSession, true)
+      : UsbCdcCloseCompletion::RELEASED;
+    if (completion == UsbCdcCloseCompletion::RELEASED) {
+      if (slot < kCallbackContextCount) {
+        impl->callbackContexts[slot].session = 0;
+        impl->activeCallbackSlot = -1;
+      }
+      outcome.type = UsbCdcControlType::HANDLE_CLOSED;
+    } else {
+      outcome.type = UsbCdcControlType::HANDLE_CLOSE_FAILED;
+      outcome.code = ESP_ERR_INVALID_STATE;
+      result = ESP_ERR_INVALID_STATE;
+    }
+  } else {
+    if (slot < kCallbackContextCount) {
+      impl->shared.finishClose(slot, impl->activeSession, false);
+    }
+    outcome.type = UsbCdcControlType::HANDLE_CLOSE_FAILED;
+    outcome.code = result;
+  }
+  applyLifecycleEvent(impl, outcome, nowMs);
+  return result == ESP_OK;
 }
 
-static uint32_t nextSession(uint32_t current) {
-  if (current == UINT32_MAX) return current;
-  return current + 1;
+static bool configurationMayContinue(UsbCdcTransport::Impl* impl,
+                                     cdc_acm_dev_hdl_t candidate,
+                                     const UsbCdcConfigToken& token) {
+  if (impl->activeCallbackSlot < 0) return false;
+  size_t slot = static_cast<size_t>(impl->activeCallbackSlot);
+  bool handleMatches = candidate != nullptr && impl->cdcHandle == candidate;
+  bool contextValid = impl->shared.configurationContextValid(
+    slot, impl->activeSession);
+  bool tokenValid = impl->shared.configurationTokenValid(token);
+  return usbCdcConfigurationMayContinue(
+    impl->lifecycle.phase(), impl->lifecycle.closePending(),
+    handleMatches, contextValid, tokenValid);
+}
+
+static void failConfiguration(UsbCdcTransport::Impl* impl, uint64_t nowMs,
+                              esp_err_t error) {
+  UsbCdcControlEvent failed;
+  failed.type = UsbCdcControlType::CONFIG_FAILED;
+  failed.code = error;
+  failed.session = impl->activeSession;
+  impl->currentDetail = "CDC configuration failed; retry scheduled";
+  if (applyTerminalEventOrDefer(impl, failed, nowMs)) {
+    closeOwnedHandle(impl, nowMs);
+  }
 }
 
 static void attemptOpenAndConfigure(UsbCdcTransport* self, uint64_t nowMs) {
   auto* impl = self->impl;
+  reapRetiredCallbackContexts(impl);
   if (!impl->lifecycle.shouldAttemptOpen(nowMs)) return;
 
-  impl->activeSession = nextSession(impl->activeSession);
-  impl->producerSession.store(impl->activeSession, std::memory_order_release);
-  impl->callbackContext.session = impl->activeSession;
-  impl->producerEnabled.store(false, std::memory_order_release);
+  bool sessionWrapped = impl->activeSession == UINT32_MAX;
+  impl->activeSession = usbCdcNextSession(impl->activeSession);
+  if (sessionWrapped) {
+    xStreamBufferReset(impl->rxStream);
+    impl->shared.clearOrdered();
+    impl->acceptedByteSequence.store(0, std::memory_order_release);
+    impl->cursor.beginSession(0, 0,
+      impl->shared.producerEpoch());
+  }
+  impl->shared.startSession(impl->activeSession);
+  UsbCdcConfigToken configToken = impl->shared.configurationToken();
+  impl->terminalBoundaryPending = false;
+  impl->terminalBoundary.reset();
+  impl->overflowMarkerPublished.store(false, std::memory_order_release);
 
   UsbCdcControlEvent started;
   started.type = UsbCdcControlType::OPEN_STARTED;
@@ -592,13 +836,28 @@ static void attemptOpenAndConfigure(UsbCdcTransport* self, uint64_t nowMs) {
   impl->lifecycle.apply(started, nowMs);
   impl->currentDetail = "Probing CDC device";
 
+  int callbackSlot = impl->shared.acquireContext(impl->activeSession);
+  if (callbackSlot < 0) {
+    UsbCdcControlEvent failed;
+    failed.type = UsbCdcControlType::OPEN_FAILED;
+    failed.code = ESP_ERR_NO_MEM;
+    failed.session = impl->activeSession;
+    impl->lifecycle.apply(failed, nowMs);
+    impl->currentDetail = "No quiescent CDC callback context available";
+    return;
+  }
+  impl->activeCallbackSlot = callbackSlot;
+  UsbCdcTransport::Impl::CallbackContext* callbackContext =
+    &impl->callbackContexts[static_cast<size_t>(callbackSlot)];
+  callbackContext->session = impl->activeSession;
+
   cdc_acm_host_device_config_t config = {
     .connection_timeout_ms = kOpenTimeoutMs,
     .out_buffer_size = 64,
     .in_buffer_size = 64,
     .event_cb = cdcEventCallback,
     .data_cb = cdcDataCallback,
-    .user_arg = &impl->callbackContext,
+    .user_arg = callbackContext,
   };
 
   cdc_acm_dev_hdl_t candidate = nullptr;
@@ -614,6 +873,7 @@ static void attemptOpenAndConfigure(UsbCdcTransport* self, uint64_t nowMs) {
   }
 
   if (candidate == nullptr || openResult != ESP_OK) {
+    retireFailedOpenCallbackContext(impl);
     UsbCdcControlEvent failed;
     failed.type = UsbCdcControlType::OPEN_FAILED;
     failed.code = openResult;
@@ -630,10 +890,7 @@ static void attemptOpenAndConfigure(UsbCdcTransport* self, uint64_t nowMs) {
   impl->lifecycle.apply(opened, nowMs);
   drainLifecycleQueue(impl, nowMs);
   closeOwnedHandle(impl, nowMs);
-  if (impl->cdcHandle == nullptr ||
-      impl->lifecycle.phase() != UsbCdcPhase::CONFIGURING) {
-    return;
-  }
+  if (!configurationMayContinue(impl, candidate, configToken)) return;
 
   cdc_acm_line_coding_t lineCoding = {
     .dwDTERate = 9600,
@@ -644,35 +901,37 @@ static void attemptOpenAndConfigure(UsbCdcTransport* self, uint64_t nowMs) {
   esp_err_t lineResult = cdc_acm_host_line_coding_set(candidate, &lineCoding);
   drainLifecycleQueue(impl, nowMs);
   closeOwnedHandle(impl, nowMs);
-  if (impl->cdcHandle == nullptr) return;
+  if (!configurationMayContinue(impl, candidate, configToken)) return;
+  if (lineResult != ESP_OK) {
+    failConfiguration(impl, nowMs, lineResult);
+    return;
+  }
 
   esp_err_t controlResult =
     cdc_acm_host_set_control_line_state(candidate, true, true);
   drainLifecycleQueue(impl, nowMs);
   closeOwnedHandle(impl, nowMs);
-  if (impl->cdcHandle == nullptr) return;
-
-  if (lineResult != ESP_OK || controlResult != ESP_OK) {
-    uint32_t epoch = beginTerminalLoss(impl);
-    enqueueOrdered(impl, UsbCdcOrderedType::STREAM_RESET,
-                   impl->activeSession, epoch, 0, false);
-    UsbCdcControlEvent failed;
-    failed.type = UsbCdcControlType::CONFIG_FAILED;
-    failed.code = lineResult != ESP_OK ? lineResult : controlResult;
-    failed.session = impl->activeSession;
-    impl->lifecycle.apply(failed, nowMs);
-    impl->currentDetail = "CDC configuration failed; retry scheduled";
-    closeOwnedHandle(impl, nowMs);
+  if (!configurationMayContinue(impl, candidate, configToken)) return;
+  if (controlResult != ESP_OK) {
+    failConfiguration(impl, nowMs, controlResult);
     return;
   }
 
-  impl->terminalLossActive.store(false, std::memory_order_release);
-  impl->overflowActive.store(false, std::memory_order_release);
-  impl->producerQuarantined.store(false, std::memory_order_release);
-  uint32_t epoch = impl->producerEpoch.load(std::memory_order_acquire);
-  bool startPublished = enqueueOrdered(
+  uint32_t epoch = impl->shared.producerEpoch();
+  UsbCdcOrderedPublishResult startResult = enqueueOrdered(
     impl, UsbCdcOrderedType::STREAM_RESET, impl->activeSession, epoch, 0, true);
-  impl->producerEnabled.store(startPublished, std::memory_order_release);
+  if (!configurationMayContinue(impl, candidate, configToken)) {
+    drainLifecycleQueue(impl, nowMs);
+    closeOwnedHandle(impl, nowMs);
+    return;
+  }
+  bool committed = impl->shared.commitConfiguration(configToken, startResult);
+  if (!committed) {
+    impl->currentDetail = "CDC configuration superseded by terminal event";
+    drainLifecycleQueue(impl, nowMs);
+    closeOwnedHandle(impl, nowMs);
+    return;
+  }
 
   UsbCdcControlEvent configured;
   configured.type = UsbCdcControlType::CONFIG_SUCCEEDED;
@@ -688,6 +947,7 @@ void UsbCdcTransport::poll() {
   return;
 #else
   if (!impl->beginCalled) return;
+  reapRetiredCallbackContexts(impl);
   uint64_t nowMs = impl->monotonicMillis();
   drainLifecycleQueue(impl, nowMs);
   closeOwnedHandle(impl, nowMs);
@@ -717,16 +977,16 @@ void UsbCdcTransport::poll() {
       impl->currentState = TRANSPORT_STATE_STARTING;
       break;
   }
+  impl->currentDiagnostics = impl->shared.diagnosticsSnapshot();
+  impl->currentReconnectCount = impl->lifecycle.reconnectCount();
 #endif
 }
 
 int UsbCdcTransport::available() {
   if (impl == nullptr || impl->rxStream == nullptr) return 0;
   size_t count = xStreamBufferBytesAvailable(impl->rxStream);
-  if (impl->orderedQueue != nullptr) count += uxQueueMessagesWaiting(impl->orderedQueue);
-  Impl::FallbackControl fallback;
 #if SOC_USB_OTG_SUPPORTED
-  if (peekFallback(impl, fallback)) count++;
+  count += impl->shared.pendingCount();
 #endif
   return count > static_cast<size_t>(INT_MAX) ? INT_MAX
                                                : static_cast<int>(count);
@@ -743,50 +1003,51 @@ bool UsbCdcTransport::nextRxEvent(MonitorRxEvent& output) {
   (void)output;
   return false;
 #else
-  if (impl == nullptr || impl->rxStream == nullptr || impl->orderedQueue == nullptr) {
-    return false;
-  }
+  if (impl == nullptr || impl->rxStream == nullptr) return false;
+  Impl* activeImpl = impl;
 
-  for (UBaseType_t attempt = 0; attempt < kOrderedQueueDepth + 2; ++attempt) {
-    if (!impl->orderedHeadValid &&
-        xQueueReceive(impl->orderedQueue, &impl->orderedHead, 0) == pdPASS) {
-      impl->orderedHeadValid = true;
+  for (size_t attempt = 0; attempt < kOrderedChannelDepth + 2; ++attempt) {
+    UsbCdcOrderedDelivery delivery;
+    UsbCdcOrderedClaimResult claim =
+      activeImpl->shared.claim(activeImpl->cursor, delivery,
+        activeImpl->lifecycle.connected(), [activeImpl]() {
+          activeImpl->overflowMarkerPublished.store(
+            false, std::memory_order_release);
+        });
+
+    if (claim == UsbCdcOrderedClaimResult::CLAIMED) {
+      if (delivery.event.droppedBytes > 0) {
+        UsbCdcControlEvent overflow;
+        overflow.type = UsbCdcControlType::RX_OVERFLOW;
+        overflow.count = delivery.event.droppedBytes;
+        overflow.session = delivery.event.session;
+        activeImpl->lifecycle.apply(overflow, 0);
+      }
+      if (delivery.producerResumed) {
+        UsbCdcControlEvent recovered;
+        recovered.type = UsbCdcControlType::RX_CAPACITY_RECOVERED;
+        recovered.session = delivery.event.session;
+        activeImpl->lifecycle.apply(recovered, 0);
+      }
+      impl->cursor.applyControl(delivery.event);
+      output.type = delivery.event.type == UsbCdcOrderedType::STREAM_RESET
+        ? MonitorRxEventType::STREAM_RESET
+        : MonitorRxEventType::DISCONTINUITY;
+      output.byte = 0;
+      output.epoch = delivery.event.epoch;
+      return true;
     }
-
-    if (impl->orderedHeadValid) {
-      if (impl->cursor.controlStale(impl->orderedHead)) {
-        impl->orderedHead = UsbCdcOrderedEvent{};
-        impl->orderedHeadValid = false;
-        continue;
+    if (claim == UsbCdcOrderedClaimResult::STALE_QUEUE_DISCARDED) continue;
+    if (claim == UsbCdcOrderedClaimResult::STALE_FALLBACK_DISCARDED) {
+      uint64_t nowMs = impl->monotonicMillis();
+      UsbCdcControlEvent failure;
+      failure.type = UsbCdcControlType::CONTROL_QUEUE_OVERFLOW;
+      failure.code = ESP_ERR_INVALID_STATE;
+      failure.session = impl->activeSession;
+      if (applyTerminalEventOrDefer(impl, failure, nowMs)) {
+        closeOwnedHandle(impl, nowMs);
       }
-      if (impl->cursor.controlDue(impl->orderedHead)) {
-        impl->cursor.applyControl(impl->orderedHead);
-        output.type = impl->orderedHead.type == UsbCdcOrderedType::STREAM_RESET
-          ? MonitorRxEventType::STREAM_RESET
-          : MonitorRxEventType::DISCONTINUITY;
-        output.byte = 0;
-        output.epoch = impl->orderedHead.epoch;
-        impl->orderedHead = UsbCdcOrderedEvent{};
-        impl->orderedHeadValid = false;
-        return true;
-      }
-    } else {
-      Impl::FallbackControl fallback;
-      if (peekFallback(impl, fallback) &&
-          impl->cursor.controlDue(fallback.event)) {
-        impl->cursor.applyControl(fallback.event);
-        output.type = fallback.event.type == UsbCdcOrderedType::STREAM_RESET
-          ? MonitorRxEventType::STREAM_RESET
-          : MonitorRxEventType::DISCONTINUITY;
-        output.byte = 0;
-        output.epoch = fallback.event.epoch;
-        consumeFallback(impl);
-        impl->producerQuarantined.store(false, std::memory_order_release);
-        if (fallback.resumeProducer && impl->lifecycle.connected()) {
-          impl->producerEnabled.store(true, std::memory_order_release);
-        }
-        return true;
-      }
+      continue;
     }
 
     uint8_t value = 0;
@@ -812,25 +1073,31 @@ MonitorTransportState UsbCdcTransport::state() const {
 }
 
 String UsbCdcTransport::detail() const {
-  return impl == nullptr ? String("USB transport unavailable")
-                         : impl->currentDetail;
+  if (impl == nullptr) return String("USB transport unavailable");
+  String result = impl->currentDetail;
+  result += " | loss_events=";
+  result += impl->currentDiagnostics.lossEpisodes;
+  result += " dropped_bytes=";
+  result += impl->currentDiagnostics.droppedBytes;
+  result += " overflow_events=";
+  result += impl->currentDiagnostics.overflowEpisodes;
+  result += " reconnects=";
+  result += impl->currentReconnectCount;
+  return result;
 }
 
 uint32_t UsbCdcTransport::dataLossCount() const {
-  return impl == nullptr ? 0
-    : impl->lifetimeLossEpisodes.load(std::memory_order_acquire);
+  return impl == nullptr ? 0 : impl->currentDiagnostics.lossEpisodes;
 }
 
 uint32_t UsbCdcTransport::reconnectCount() const {
-  return impl == nullptr ? 0 : impl->lifecycle.reconnectCount();
+  return impl == nullptr ? 0 : impl->currentReconnectCount;
 }
 
 uint32_t UsbCdcTransport::droppedByteCount() const {
-  return impl == nullptr ? 0
-    : impl->lifetimeDroppedBytes.load(std::memory_order_acquire);
+  return impl == nullptr ? 0 : impl->currentDiagnostics.droppedBytes;
 }
 
 uint32_t UsbCdcTransport::overflowEpisodeCount() const {
-  return impl == nullptr ? 0
-    : impl->lifetimeOverflowEpisodes.load(std::memory_order_acquire);
+  return impl == nullptr ? 0 : impl->currentDiagnostics.overflowEpisodes;
 }
