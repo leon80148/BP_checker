@@ -55,6 +55,12 @@ remains ready, authorizes a lower follow-on sequence, and overwrites the newer
 durable slot. At `b2bf543`, the focused normal and ASan/UBSan runs pass all 112
 checks; failed reconciliation locks the runtime object until explicit reload.
 
+The bounded consumer lifecycle RED can be replayed by overlaying
+`184a0fb:test/host/test_bounded_stream_consumer.cpp` onto `f1504c3` and running
+the normal focused compile. It exits 1 because `lib/BoundedStreamConsumer.h`
+does not exist. At `184a0fb`, normal and ASan/UBSan focused runs pass 67 checks,
+and the full host runner includes the lifecycle test automatically.
+
 ## Bounded Binary HTTP Stream
 
 The production commit is `da220d1`. Its parent, `f43c855`, still rejects every
