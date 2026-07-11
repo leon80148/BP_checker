@@ -49,6 +49,10 @@ public:
 
   StreamConsumerResult start(uint32_t expectedLength,
                              const StreamConsumerCallbacks& callbacks) {
+    if (_callbackInProgress) {
+      _reentryDetected = true;
+      return StreamConsumerResult::INVALID_STATE;
+    }
     if (_state == StreamConsumerState::ACTIVE) {
       return StreamConsumerResult::INVALID_STATE;
     }
@@ -64,19 +68,25 @@ public:
     _receivedLength = 0;
     _state = StreamConsumerState::ACTIVE;
     bool began = false;
+    beginCallback();
     try {
       began = _callbacks.begin(_callbacks.context, expectedLength);
     } catch (...) {
       began = false;
     }
-    if (!began) {
-      failAndAbort();
+    const bool reentered = endCallback();
+    if (!began || reentered || _state != StreamConsumerState::ACTIVE) {
+      if (_state == StreamConsumerState::ACTIVE) failAndAbort();
       return StreamConsumerResult::BEGIN_FAILED;
     }
     return StreamConsumerResult::OK;
   }
 
   StreamConsumerResult write(const uint8_t* bytes, size_t length) {
+    if (_callbackInProgress) {
+      _reentryDetected = true;
+      return StreamConsumerResult::INVALID_STATE;
+    }
     if (_state != StreamConsumerState::ACTIVE) {
       return StreamConsumerResult::INVALID_STATE;
     }
@@ -86,13 +96,15 @@ public:
       return StreamConsumerResult::INVALID_LENGTH;
     }
     bool written = false;
+    beginCallback();
     try {
       written = _callbacks.write(_callbacks.context, bytes, length);
     } catch (...) {
       written = false;
     }
-    if (!written) {
-      failAndAbort();
+    const bool reentered = endCallback();
+    if (!written || reentered || _state != StreamConsumerState::ACTIVE) {
+      if (_state == StreamConsumerState::ACTIVE) failAndAbort();
       return StreamConsumerResult::WRITE_FAILED;
     }
     _receivedLength += static_cast<uint32_t>(length);
@@ -100,6 +112,10 @@ public:
   }
 
   StreamConsumerResult finish() {
+    if (_callbackInProgress) {
+      _reentryDetected = true;
+      return StreamConsumerResult::INVALID_STATE;
+    }
     if (_state != StreamConsumerState::ACTIVE) {
       return StreamConsumerResult::INVALID_STATE;
     }
@@ -108,13 +124,15 @@ public:
       return StreamConsumerResult::INVALID_LENGTH;
     }
     bool finished = false;
+    beginCallback();
     try {
       finished = _callbacks.finish(_callbacks.context);
     } catch (...) {
       finished = false;
     }
-    if (!finished) {
-      failAndAbort();
+    const bool reentered = endCallback();
+    if (!finished || reentered || _state != StreamConsumerState::ACTIVE) {
+      if (_state == StreamConsumerState::ACTIVE) failAndAbort();
       return StreamConsumerResult::FINISH_FAILED;
     }
     clearRuntime();
@@ -123,6 +141,7 @@ public:
   }
 
   void cancel() {
+    if (_callbackInProgress) _reentryDetected = true;
     if (_state == StreamConsumerState::ACTIVE) {
       failAndAbort();
     } else {
@@ -131,6 +150,11 @@ public:
   }
 
   void reset() {
+    if (_callbackInProgress) {
+      _reentryDetected = true;
+      cancel();
+      return;
+    }
     cancel();
     _state = StreamConsumerState::IDLE;
   }
@@ -145,6 +169,8 @@ private:
   uint32_t _expectedLength = 0;
   uint32_t _receivedLength = 0;
   StreamConsumerState _state = StreamConsumerState::IDLE;
+  bool _callbackInProgress = false;
+  bool _reentryDetected = false;
 
   static void secureZero(void* target, size_t length) {
     volatile uint8_t* bytes = static_cast<volatile uint8_t*>(target);
@@ -157,6 +183,18 @@ private:
     _receivedLength = 0;
   }
 
+  void beginCallback() {
+    _callbackInProgress = true;
+    _reentryDetected = false;
+  }
+
+  bool endCallback() {
+    const bool reentered = _reentryDetected;
+    _callbackInProgress = false;
+    _reentryDetected = false;
+    return reentered;
+  }
+
   void failAndAbort() {
     StreamAbortFn abort = _callbacks.abort;
     void* context = _callbacks.context;
@@ -165,11 +203,14 @@ private:
     clearRuntime();
     _state = StreamConsumerState::FAILED;
     if (abort == nullptr) return;
+    const bool nested = _callbackInProgress;
+    if (!nested) beginCallback();
     try {
       abort(context);
     } catch (...) {
       // Cleanup is best-effort at this boundary; state remains fail closed.
     }
+    if (!nested) (void)endCallback();
   }
 };
 

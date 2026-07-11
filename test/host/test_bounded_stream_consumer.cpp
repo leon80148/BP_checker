@@ -1,5 +1,6 @@
 #include <cstdlib>
 #include <cstring>
+#include <initializer_list>
 #include <new>
 
 #include "../../lib/BoundedStreamConsumer.h"
@@ -29,6 +30,8 @@ static int code(StreamConsumerResult result) {
 }
 
 struct Fixture {
+  enum class Reenter { NONE, BEGIN, WRITE, FINISH } reenter = Reenter::NONE;
+  BoundedStreamConsumer* consumer = nullptr;
   bool beginOk = true;
   bool writeOk = true;
   bool finishOk = true;
@@ -49,6 +52,9 @@ static bool begin(void* context, uint32_t expected) {
   Fixture* fixture = static_cast<Fixture*>(context);
   fixture->begins++;
   fixture->expected = expected;
+  if (fixture->reenter == Fixture::Reenter::BEGIN && fixture->consumer) {
+    fixture->consumer->cancel();
+  }
   if (fixture->throwBegin) throw 1;
   return fixture->beginOk;
 }
@@ -56,6 +62,9 @@ static bool begin(void* context, uint32_t expected) {
 static bool write(void* context, const uint8_t* bytes, size_t length) {
   Fixture* fixture = static_cast<Fixture*>(context);
   fixture->writes++;
+  if (fixture->reenter == Fixture::Reenter::WRITE && fixture->consumer) {
+    fixture->consumer->cancel();
+  }
   if (fixture->throwWrite) throw 2;
   if (!fixture->writeOk || fixture->received + length > sizeof(fixture->bytes)) {
     return false;
@@ -68,6 +77,9 @@ static bool write(void* context, const uint8_t* bytes, size_t length) {
 static bool finish(void* context) {
   Fixture* fixture = static_cast<Fixture*>(context);
   fixture->finishes++;
+  if (fixture->reenter == Fixture::Reenter::FINISH && fixture->consumer) {
+    fixture->consumer->cancel();
+  }
   if (fixture->throwFinish) throw 3;
   return fixture->finishOk;
 }
@@ -261,11 +273,53 @@ static void testNoAllocation() {
            "consumer lifecycle makes no dynamic allocation attempt");
 }
 
+static void testCallbackReentryCannotResurrectAbortedStream() {
+  const uint8_t byte = 1;
+  for (const Fixture::Reenter stage : {
+         Fixture::Reenter::BEGIN,
+         Fixture::Reenter::WRITE,
+         Fixture::Reenter::FINISH,
+       }) {
+    Fixture fixture;
+    BoundedStreamConsumer consumer;
+    fixture.reenter = stage;
+    fixture.consumer = &consumer;
+    const StreamConsumerResult started = consumer.start(1, callbacks(fixture));
+    if (stage == Fixture::Reenter::BEGIN) {
+      CHECK_EQ(code(started), code(StreamConsumerResult::BEGIN_FAILED),
+               "begin re-entry cannot report success after abort");
+    } else {
+      CHECK_EQ(code(started), code(StreamConsumerResult::OK),
+               "non-begin re-entry fixture starts normally");
+      const StreamConsumerResult written = consumer.write(&byte, 1);
+      if (stage == Fixture::Reenter::WRITE) {
+        CHECK_EQ(code(written), code(StreamConsumerResult::WRITE_FAILED),
+                 "write re-entry cannot report success after abort");
+      } else {
+        CHECK_EQ(code(written), code(StreamConsumerResult::OK),
+                 "finish re-entry fixture writes normally");
+        CHECK_EQ(code(consumer.finish()),
+                 code(StreamConsumerResult::FINISH_FAILED),
+                 "finish re-entry cannot resurrect aborted stream");
+      }
+    }
+    CHECK_EQ(static_cast<int>(consumer.state()),
+             static_cast<int>(StreamConsumerState::FAILED),
+             "callback re-entry leaves lifecycle failed closed");
+    CHECK_EQ(fixture.aborts, 1,
+             "callback re-entry aborts external owner exactly once");
+    consumer.cancel();
+    CHECK_EQ(fixture.aborts, 1,
+             "later cleanup cannot repeat re-entry abort");
+  }
+}
+
 int main() {
   testSuccessfulLifecycleAndReuse();
   testInvalidConfigurationAndBeginFailure();
   testWriteBoundsFailuresAndIdempotentAbort();
   testFinishFailuresActiveRestartAndDestructor();
+  testCallbackReentryCannotResurrectAbortedStream();
   testNoAllocation();
   return testReport();
 }
