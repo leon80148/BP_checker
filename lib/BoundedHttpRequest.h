@@ -97,6 +97,11 @@ struct ConsumeResult {
   RequestState state;
 };
 
+struct RequestBodyChunk {
+  const uint8_t* data;
+  size_t length;
+};
+
 class BoundedHttpRequest {
 public:
   static constexpr size_t kRequestLineLimit = 256;
@@ -106,8 +111,13 @@ public:
   static constexpr size_t kByteBudget = 256;
   static constexpr size_t kSmallFormLimit = 1024;
   static constexpr size_t kStreamChunkLimit = 256;
+  // ESP32-S3's pinned application partition supports a 1,310,720-byte image.
+  // No route may expand the binary request envelope beyond that boundary.
+  static constexpr size_t kStreamBodyLimit = 1310720;
   static constexpr uint32_t kHeaderDeadlineMs = 1500;
   static constexpr uint32_t kBodyDeadlineMs = 1500;
+  // One absolute window for a maximum-size image; progress never extends it.
+  static constexpr uint32_t kStreamBodyDeadlineMs = 120000;
 
   BoundedHttpRequest() { reset(0); }
 
@@ -169,8 +179,16 @@ public:
       reject(RequestError::INVALID_POLICY);
       return false;
     }
+    if (mode == BodyMode::STREAM && routeBodyCap > kStreamBodyLimit) {
+      reject(RequestError::INVALID_POLICY);
+      return false;
+    }
     if (!_view.hasContentLength) {
       reject(RequestError::LENGTH_REQUIRED);
+      return false;
+    }
+    if (mode == BodyMode::STREAM && _view.contentLength == 0) {
+      reject(RequestError::INVALID_CONTENT_LENGTH);
       return false;
     }
     if (_view.contentLength > routeBodyCap ||
@@ -184,6 +202,15 @@ public:
         "application/x-www-form-urlencoded";
       if (!nameEquals(_view.contentType, std::strlen(_view.contentType),
                       kFormContentType)) {
+        reject(RequestError::UNSUPPORTED_MEDIA_TYPE);
+        return false;
+      }
+    }
+    if (mode == BodyMode::STREAM) {
+      static constexpr char kStreamContentType[] =
+        "application/octet-stream";
+      if (!nameEquals(_view.contentType, std::strlen(_view.contentType),
+                      kStreamContentType)) {
         reject(RequestError::UNSUPPORTED_MEDIA_TYPE);
         return false;
       }
@@ -204,8 +231,9 @@ public:
       return {0, _state};
     }
     if (_state == RequestState::BODY) {
-      if (static_cast<uint32_t>(nowMs - _bodyStartedAt) >=
-          kBodyDeadlineMs) {
+      const uint32_t deadlineMs = _bodyMode == BodyMode::STREAM
+        ? kStreamBodyDeadlineMs : kBodyDeadlineMs;
+      if (static_cast<uint32_t>(nowMs - _bodyStartedAt) >= deadlineMs) {
         reject(RequestError::TIMEOUT);
         return {0, _state};
       }

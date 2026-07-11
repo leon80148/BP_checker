@@ -58,6 +58,20 @@ static std::string drain(BoundedHttpTransaction& transaction,
   return wire;
 }
 
+static bool objectContainsBytes(const void* object, size_t objectSize,
+                                const uint8_t* needle,
+                                size_t needleLength) {
+  if (object == nullptr || needle == nullptr || needleLength == 0 ||
+      needleLength > objectSize) {
+    return false;
+  }
+  const auto* bytes = static_cast<const uint8_t*>(object);
+  for (size_t offset = 0; offset + needleLength <= objectSize; ++offset) {
+    if (std::memcmp(bytes + offset, needle, needleLength) == 0) return true;
+  }
+  return false;
+}
+
 static void testDeniedPolicyNeverConsumesBody() {
   BoundedHttpTransaction transaction;
   transaction.begin(100);
@@ -276,7 +290,7 @@ static void testSendDeadlineInvalidTransitionsAndNoAllocation() {
            "allocation-free denial drains successfully");
 }
 
-static void testHandoffDeadlinesStreamAndMethodMetadata() {
+static void testHandoffDeadlinesAndMethodMetadata() {
   static const char get[] = "GET / HTTP/1.1\r\nHost: 10.0.0.5\r\n\r\n";
   static const char authenticatedGet[] =
     "GET / HTTP/1.1\r\n"
@@ -332,25 +346,6 @@ static void testHandoffDeadlinesStreamAndMethodMetadata() {
   const std::string captureFailure = drain(captureWait);
   CHECK_TRUE(captureFailure.find(partialSecret) == std::string::npos,
              "capture timeout never sends partial sensitive output");
-
-  BoundedHttpTransaction stream;
-  stream.begin(400);
-  static const char streamHeaders[] =
-    "POST /stream HTTP/1.1\r\n"
-    "Host: 10.0.0.5\r\n"
-    "Content-Length: 600\r\n\r\n";
-  const std::string streamWire =
-    std::string(streamHeaders) + std::string(300, 's');
-  CHECK_EQ(feedUntilBoundary(stream, streamWire, 400),
-           sizeof(streamHeaders) - 1,
-           "unsupported stream body remains unread before policy");
-  CHECK_TRUE(!stream.acceptPolicy(BodyMode::STREAM, 600, 401),
-             "transaction fails closed until stream draining is implemented");
-  CHECK_EQ(stream.queuedStatus(), 501,
-           "unsupported streaming returns not implemented");
-  CHECK_EQ(static_cast<int>(stream.state()),
-           static_cast<int>(TransactionState::SENDING_RESPONSE),
-           "unsupported stream cannot enter a stuck body state");
 
   BoundedHttpTransaction wrongMethod;
   wrongMethod.begin(500);
@@ -501,11 +496,361 @@ static void testHandoffDeadlinesStreamAndMethodMetadata() {
              "handler allocation failure never leaks partial output");
 }
 
+static void testStreamFragmentationBudgetBackpressureAndPipeline() {
+  BoundedHttpTransaction stream;
+  stream.begin(400);
+  static const char streamHeaders[] =
+    "POST /stream HTTP/1.1\r\n"
+    "Host: 10.0.0.5\r\n"
+    "Content-Type: application/octet-stream\r\n"
+    "Content-Length: 600\r\n\r\n";
+  uint8_t wire[604] = {};
+  for (size_t i = 0; i < 600; ++i) {
+    wire[i] = static_cast<uint8_t>((i * 37U) & 0xffU);
+  }
+  std::memcpy(wire + 600, "PIPE", 4);
+
+  CHECK_EQ(feedUntilBoundary(stream, streamHeaders, 400),
+           sizeof(streamHeaders) - 1,
+           "stream headers stop at the central policy boundary");
+  CHECK_TRUE(stream.acceptPolicy(BodyMode::STREAM, 600, 401),
+             "authorized binary stream enters bounded body reading");
+  CHECK_EQ(static_cast<int>(stream.state()),
+           static_cast<int>(TransactionState::READING_BODY),
+           "accepted stream waits for a consumer-drained chunk");
+
+  size_t offset = 0;
+  uint8_t reconstructed[600] = {};
+  size_t reconstructedLength = 0;
+  const size_t budgets[] = {1, 17, 255, 999};
+  size_t budgetIndex = 0;
+  while (offset < 600) {
+    const size_t budget = budgets[budgetIndex++ % 4];
+    const TransactionConsume part = stream.consume(
+      wire + offset, sizeof(wire) - offset, 402, budget);
+    CHECK_TRUE(part.consumed > 0 &&
+                 part.consumed <= BoundedHttpRequest::kStreamChunkLimit,
+               "each stream read obeys caller and 256-byte hard budgets");
+    CHECK_TRUE(part.consumed <= budget,
+               "stream read never exceeds a smaller caller budget");
+    offset += part.consumed;
+    CHECK_TRUE(offset <= 600,
+               "declared length prevents consuming pipelined bytes");
+    CHECK_EQ(static_cast<int>(stream.state()),
+             static_cast<int>(TransactionState::READING_BODY),
+             "even the final received chunk is not dispatch-ready before drain");
+
+    const RequestBodyChunk pending = stream.pendingStreamChunk();
+    CHECK_TRUE(pending.data != nullptr,
+               "transaction exposes a read-only pending stream view");
+    CHECK_EQ(pending.length, part.consumed,
+             "pending view matches socket consumption exactly");
+    static_assert(std::is_same<decltype(pending.data), const uint8_t*>::value,
+                  "pending stream bytes are read-only");
+    std::memcpy(reconstructed + reconstructedLength,
+                pending.data, pending.length);
+    reconstructedLength += pending.length;
+
+    const TransactionConsume blocked = stream.consume(
+      wire + offset, sizeof(wire) - offset, 403, 999);
+    CHECK_EQ(blocked.consumed, 0UL,
+             "undrained chunk applies backpressure to socket input");
+    CHECK_TRUE(stream.drainStreamChunk(404),
+               "consumer explicitly drains one pending chunk");
+    CHECK_EQ(stream.pendingStreamChunk().length, 0UL,
+             "drain removes the pending chunk view");
+    for (size_t i = 0; i < pending.length; ++i) {
+      CHECK_EQ(pending.data[i], static_cast<uint8_t>(0),
+               "drain securely zeros bytes behind the former read-only view");
+    }
+  }
+
+  CHECK_EQ(offset, 600UL, "stream consumes exactly Content-Length bytes");
+  CHECK_EQ(reconstructedLength, 600UL,
+           "fragmented stream reconstructs the complete body");
+  CHECK_TRUE(std::memcmp(reconstructed, wire, 600) == 0,
+             "stream preserves arbitrary binary byte order");
+  CHECK_EQ(static_cast<int>(stream.state()),
+           static_cast<int>(TransactionState::DISPATCH_READY),
+           "only explicit final-chunk drain makes stream dispatch-ready");
+  CHECK_TRUE(!stream.drainStreamChunk(405),
+             "drain is rejected when no stream chunk is pending");
+  CHECK_EQ(sizeof(wire) - offset, 4UL,
+           "four pipelined bytes remain for the closed connection");
+}
+
+static void testStreamPolicyMediaTypeAndHardCap() {
+  static_assert(BoundedHttpRequest::kStreamBodyLimit == 1310720UL,
+                "stream hard cap matches the maximum update image envelope");
+
+  auto prepare = [](BoundedHttpTransaction& transaction,
+                    const char* contentLength,
+                    const char* contentType) {
+    transaction.begin(500);
+    std::string headers =
+      "POST /stream HTTP/1.1\r\nHost: 10.0.0.5\r\n";
+    if (contentType != nullptr) {
+      headers += "Content-Type: ";
+      headers += contentType;
+      headers += "\r\n";
+    }
+    if (contentLength != nullptr) {
+      headers += "Content-Length: ";
+      headers += contentLength;
+      headers += "\r\n";
+    }
+    headers += "\r\n";
+    (void)feedUntilBoundary(transaction, headers, 500);
+  };
+
+  BoundedHttpTransaction missingLength;
+  prepare(missingLength, nullptr, "application/octet-stream");
+  CHECK_TRUE(!missingLength.acceptPolicy(BodyMode::STREAM, 600, 501),
+             "stream requires explicit Content-Length");
+  CHECK_EQ(missingLength.queuedStatus(), 411,
+           "missing stream length becomes Length Required");
+
+  BoundedHttpTransaction missingType;
+  prepare(missingType, "1", nullptr);
+  CHECK_TRUE(!missingType.acceptPolicy(BodyMode::STREAM, 600, 501),
+             "stream requires an explicit binary media type");
+  CHECK_EQ(missingType.queuedStatus(), 415,
+           "missing stream type becomes Unsupported Media Type");
+
+  BoundedHttpTransaction wrongType;
+  prepare(wrongType, "1", "application/x-www-form-urlencoded");
+  CHECK_TRUE(!wrongType.acceptPolicy(BodyMode::STREAM, 600, 501),
+             "stream rejects non-binary media type");
+  CHECK_EQ(wrongType.queuedStatus(), 415,
+           "wrong stream type becomes Unsupported Media Type");
+
+  BoundedHttpTransaction parameterizedType;
+  prepare(parameterizedType, "1", "application/octet-stream; charset=utf-8");
+  CHECK_TRUE(!parameterizedType.acceptPolicy(
+               BodyMode::STREAM, 600, 501),
+             "stream media type is exact and parameter-free");
+  CHECK_EQ(parameterizedType.queuedStatus(), 415,
+           "parameterized binary type fails closed");
+
+  BoundedHttpTransaction caseInsensitiveType;
+  prepare(caseInsensitiveType, "1", "Application/Octet-Stream");
+  CHECK_TRUE(caseInsensitiveType.acceptPolicy(
+               BodyMode::STREAM, 600, 501),
+             "HTTP media type token comparison is case-insensitive");
+
+  BoundedHttpTransaction routeOversize;
+  prepare(routeOversize, "601", "application/octet-stream");
+  CHECK_TRUE(!routeOversize.acceptPolicy(BodyMode::STREAM, 600, 501),
+             "route-specific stream cap rejects oversized body");
+  CHECK_EQ(routeOversize.queuedStatus(), 413,
+           "route cap rejection becomes Payload Too Large");
+
+  BoundedHttpTransaction emptyStream;
+  prepare(emptyStream, "0", "application/octet-stream");
+  CHECK_TRUE(!emptyStream.acceptPolicy(BodyMode::STREAM, 600, 501),
+             "empty binary stream cannot bypass final-chunk drain");
+  CHECK_EQ(emptyStream.queuedStatus(), 400,
+           "zero-length stream is an invalid binary request");
+
+  BoundedHttpTransaction invalidGlobalCap;
+  prepare(invalidGlobalCap, "1", "application/octet-stream");
+  CHECK_TRUE(!invalidGlobalCap.acceptPolicy(
+               BodyMode::STREAM,
+               BoundedHttpRequest::kStreamBodyLimit + 1UL, 501),
+             "caller cannot install a route cap above the global hard limit");
+  CHECK_EQ(invalidGlobalCap.queuedStatus(), 500,
+           "invalid oversized route policy fails closed");
+
+  BoundedHttpTransaction exactGlobalCap;
+  prepare(exactGlobalCap, "1310720", "application/octet-stream");
+  CHECK_TRUE(exactGlobalCap.acceptPolicy(
+               BodyMode::STREAM, BoundedHttpRequest::kStreamBodyLimit, 501),
+             "maximum supported image length is accepted exactly");
+
+  BoundedHttpTransaction transferEncoding;
+  transferEncoding.begin(500);
+  static const uint8_t chunked[] =
+    "POST /stream HTTP/1.1\r\nHost: 10.0.0.5\r\n"
+    "Content-Type: application/octet-stream\r\n"
+    "Transfer-Encoding: chunked\r\n\r\n";
+  (void)transferEncoding.consume(chunked, sizeof(chunked) - 1, 500);
+  CHECK_EQ(transferEncoding.queuedStatus(), 501,
+           "Transfer-Encoding is parser-denied before stream policy");
+
+  BoundedHttpTransaction expectation;
+  expectation.begin(500);
+  static const uint8_t expect[] =
+    "POST /stream HTTP/1.1\r\nHost: 10.0.0.5\r\n"
+    "Content-Type: application/octet-stream\r\n"
+    "Content-Length: 1\r\nExpect: 100-continue\r\n\r\n";
+  (void)expectation.consume(expect, sizeof(expect) - 1, 500);
+  CHECK_EQ(expectation.queuedStatus(), 417,
+           "Expect is parser-denied before stream policy");
+}
+
+static void testStreamAbsoluteDeadlineWrapAndSmallFormDeadline() {
+  static_assert(BoundedHttpRequest::kBodyDeadlineMs == 1500U,
+                "small form body deadline remains short");
+  static_assert(BoundedHttpRequest::kStreamBodyDeadlineMs == 120000U,
+                "stream gets one finite two-minute absolute deadline");
+
+  const uint32_t start = UINT32_MAX - 59999U;
+  BoundedHttpTransaction stream;
+  stream.begin(start - 1U);
+  static const char headers[] =
+    "POST /stream HTTP/1.1\r\nHost: 10.0.0.5\r\n"
+    "Content-Type: application/octet-stream\r\n"
+    "Content-Length: 2\r\n\r\n";
+  (void)feedUntilBoundary(stream, headers, start - 1U);
+  CHECK_TRUE(stream.acceptPolicy(BodyMode::STREAM, 2, start),
+             "wrapped deadline fixture accepts stream");
+  static const uint8_t first[] = {0x91};
+  CHECK_EQ(stream.consume(first, sizeof(first), start + 119999U).consumed,
+           1UL, "late stream progress is accepted before absolute deadline");
+  CHECK_TRUE(stream.pendingStreamChunk().length == 1,
+             "late progress produces one pending chunk");
+  CHECK_TRUE(stream.poll(start + 120000U),
+             "deadline timeout is converted to a bounded response");
+  CHECK_EQ(stream.queuedStatus(), 408,
+           "stream trickle does not extend the absolute deadline");
+  CHECK_EQ(static_cast<int>(stream.state()),
+           static_cast<int>(TransactionState::SENDING_RESPONSE),
+           "wrapped stream timeout fails through response pump");
+  CHECK_EQ(stream.pendingStreamChunk().length, 0UL,
+           "timeout wipes pending binary bytes");
+
+  BoundedHttpTransaction lateDrain;
+  lateDrain.begin(6000);
+  static const char oneByteHeaders[] =
+    "POST /stream HTTP/1.1\r\nHost: 10.0.0.5\r\n"
+    "Content-Type: application/octet-stream\r\n"
+    "Content-Length: 1\r\n\r\n";
+  (void)feedUntilBoundary(lateDrain, oneByteHeaders, 6000);
+  CHECK_TRUE(lateDrain.acceptPolicy(BodyMode::STREAM, 1, 6001),
+             "late-drain fixture accepts stream");
+  CHECK_EQ(lateDrain.consume(first, sizeof(first), 6002).consumed, 1UL,
+           "final chunk arrives within the absolute window");
+  CHECK_TRUE(!lateDrain.drainStreamChunk(
+               6001 + BoundedHttpRequest::kStreamBodyDeadlineMs),
+             "direct final drain cannot bypass the absolute deadline");
+  CHECK_EQ(lateDrain.queuedStatus(), 408,
+           "late direct drain queues Request Timeout");
+  CHECK_EQ(lateDrain.pendingStreamChunk().length, 0UL,
+           "late direct drain wipes the expired chunk");
+
+  BoundedHttpTransaction smallForm;
+  smallForm.begin(1000);
+  static const char formHeaders[] =
+    "POST /form HTTP/1.1\r\nHost: 10.0.0.5\r\n"
+    "Content-Type: application/x-www-form-urlencoded\r\n"
+    "Content-Length: 2\r\n\r\n";
+  (void)feedUntilBoundary(smallForm, formHeaders, 1000);
+  CHECK_TRUE(smallForm.acceptPolicy(BodyMode::SMALL_FORM, 2, 1001),
+             "small-form deadline fixture accepts policy");
+  CHECK_TRUE(smallForm.poll(2500),
+             "small form remains active one millisecond before deadline");
+  CHECK_TRUE(smallForm.poll(2501),
+             "small form times out at the unchanged 1500ms boundary");
+  CHECK_EQ(smallForm.queuedStatus(), 408,
+           "small form retains its short request timeout");
+}
+
+static void testStreamInvalidDrainWipeDestructorAndNoAllocation() {
+  static const uint8_t secretChunk[] = {
+    0xde, 0xad, 0xfa, 0xce, 0x13, 0x57, 0x9b, 0xdf,
+  };
+  static const char headers[] =
+    "POST /stream HTTP/1.1\r\nHost: 10.0.0.5\r\n"
+    "Content-Type: application/octet-stream\r\n"
+    "Content-Length: 8\r\n\r\n";
+
+  BoundedHttpTransaction invalid;
+  CHECK_TRUE(!invalid.drainStreamChunk(1),
+             "drain is invalid before a transaction begins");
+  invalid.begin(1);
+  (void)feedUntilBoundary(invalid, headers, 1);
+  CHECK_TRUE(!invalid.drainStreamChunk(2),
+             "drain is invalid while waiting for route policy");
+  CHECK_TRUE(invalid.acceptPolicy(BodyMode::STREAM, 8, 2),
+             "invalid-drain fixture accepts policy");
+  CHECK_TRUE(!invalid.drainStreamChunk(3),
+             "drain is invalid before any chunk is pending");
+
+  bool threw = false;
+  gDeniedAllocationCalls = 0;
+  gDenyAllocations = true;
+  try {
+    (void)invalid.consume(secretChunk, sizeof(secretChunk), 3, 999);
+    (void)invalid.pendingStreamChunk();
+    (void)invalid.drainStreamChunk(4);
+  } catch (const std::bad_alloc&) {
+    threw = true;
+  }
+  gDenyAllocations = false;
+  CHECK_TRUE(!threw, "stream consume/view/drain work with allocation denied");
+  CHECK_EQ(gDeniedAllocationCalls, 0UL,
+           "stream transaction makes no dynamic allocation attempt");
+
+  BoundedHttpTransaction aborted;
+  aborted.begin(10);
+  (void)feedUntilBoundary(aborted, headers, 10);
+  CHECK_TRUE(aborted.acceptPolicy(BodyMode::STREAM, 8, 11),
+             "abort wipe fixture accepts policy");
+  (void)aborted.consume(secretChunk, sizeof(secretChunk), 12);
+  CHECK_TRUE(objectContainsBytes(&aborted, sizeof(aborted),
+                                 secretChunk, sizeof(secretChunk)),
+             "pending binary canary exists before abort");
+  aborted.abort();
+  CHECK_EQ(static_cast<int>(aborted.state()),
+           static_cast<int>(TransactionState::ABORTED),
+           "abort terminates stream transaction");
+  CHECK_EQ(aborted.pendingStreamChunk().length, 0UL,
+           "abort removes pending stream view");
+  CHECK_TRUE(!objectContainsBytes(&aborted, sizeof(aborted),
+                                  secretChunk, sizeof(secretChunk)),
+             "abort securely clears pending binary bytes");
+  CHECK_TRUE(!aborted.drainStreamChunk(13),
+             "drain is rejected after abort");
+
+  BoundedHttpTransaction reset;
+  reset.begin(20);
+  (void)feedUntilBoundary(reset, headers, 20);
+  CHECK_TRUE(reset.acceptPolicy(BodyMode::STREAM, 8, 21),
+             "reset wipe fixture accepts policy");
+  (void)reset.consume(secretChunk, sizeof(secretChunk), 22);
+  reset.begin(23);
+  CHECK_TRUE(!objectContainsBytes(&reset, sizeof(reset),
+                                  secretChunk, sizeof(secretChunk)),
+             "begin/reset securely clears pending binary bytes");
+
+  alignas(BoundedHttpTransaction)
+    uint8_t storage[sizeof(BoundedHttpTransaction)];
+  std::memset(storage, 0xa5, sizeof(storage));
+  auto* placed =
+    ::new (static_cast<void*>(storage)) BoundedHttpTransaction();
+  placed->begin(30);
+  (void)feedUntilBoundary(*placed, headers, 30);
+  CHECK_TRUE(placed->acceptPolicy(BodyMode::STREAM, 8, 31),
+             "destructor wipe fixture accepts policy");
+  (void)placed->consume(secretChunk, sizeof(secretChunk), 32);
+  CHECK_TRUE(objectContainsBytes(storage, sizeof(storage),
+                                 secretChunk, sizeof(secretChunk)),
+             "pending binary canary exists before destruction");
+  placed->~BoundedHttpTransaction();
+  CHECK_TRUE(!objectContainsBytes(storage, sizeof(storage),
+                                  secretChunk, sizeof(secretChunk)),
+             "transaction destruction securely clears stream bytes");
+}
+
 int main() {
   testDeniedPolicyNeverConsumesBody();
   testAllowedBodyAndCapturedResponseLifecycle();
   testBoundsTimeoutsAndOverflowFailClosed();
   testSendDeadlineInvalidTransitionsAndNoAllocation();
-  testHandoffDeadlinesStreamAndMethodMetadata();
+  testHandoffDeadlinesAndMethodMetadata();
+  testStreamFragmentationBudgetBackpressureAndPipeline();
+  testStreamPolicyMediaTypeAndHardCap();
+  testStreamAbsoluteDeadlineWrapAndSmallFormDeadline();
+  testStreamInvalidDrainWipeDestructorAndNoAllocation();
   return testReport();
 }

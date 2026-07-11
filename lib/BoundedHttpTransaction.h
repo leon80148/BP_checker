@@ -71,13 +71,26 @@ public:
       (void)queueError(408, nowMs);
       return false;
     }
-    if (mode == BodyMode::STREAM) {
-      (void)queueError(501, nowMs);
-      return false;
-    }
     const bool accepted = _request.acceptPolicy(mode, routeBodyCap, nowMs);
     synchronizeRequestState(nowMs);
     return accepted;
+  }
+
+  RequestBodyChunk pendingStreamChunk() const {
+    if (_state != TransactionState::READING_BODY) return {nullptr, 0};
+    const size_t length = _request.streamChunkLength();
+    if (length == 0) return {nullptr, 0};
+    return {_request.streamChunk(), length};
+  }
+
+  bool drainStreamChunk(uint32_t nowMs) {
+    if (_state != TransactionState::READING_BODY) return false;
+    (void)_request.consume(nullptr, 0, nowMs);
+    synchronizeRequestState(nowMs);
+    if (_state != TransactionState::READING_BODY) return false;
+    if (!_request.drainStreamChunk()) return false;
+    synchronizeRequestState(nowMs);
+    return true;
   }
 
   bool rejectPolicy(int status, uint32_t nowMs) {
