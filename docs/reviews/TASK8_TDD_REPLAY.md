@@ -5,6 +5,7 @@
 - Initial Task 8 implementation: `02ff21b9647d9f95e05f50830458c03417ce3ef8`
 - Spec-review fix: `595ea60bb93549062de377604f05bd3abf8ec506`
 - Policy-version dashboard fix: `cf30577b83fc02a77150effbf2c80aa5db59b16e`
+- Polling-liveness fix: `a58ae2e709ca9ab5e40f47529f1f510ac466e7ae`
 - Toolchain: Arduino CLI 1.4.1, ESP32 core 3.3.7, ArduinoJson 7.4.2,
   host C++17 compiler; run date 2026-07-11.
 
@@ -106,6 +107,28 @@ This failure demonstrated that the page had no snapshot of the active policy
 version and could not reload when `/api/latest` changed policy without changing
 the measurement revision.
 
+### Bounded polling and independent freshness watchdog
+
+After adding the polling-liveness contract over `64af22d`,
+`bash scripts/check_ui_markup.sh` exited 1 with:
+
+```text
+missing bounded dashboard polling/watchdog contract: AbortController
+```
+
+The first implementation used the lower of the measurement stale threshold
+and request deadline for response silence. A focused contract correction then
+exited 1 with:
+
+```text
+missing bounded dashboard polling/watchdog contract: responseAge>=bpRequestDeadlineMs
+```
+
+This second RED prevents a one-second measurement stale policy from falsely
+marking the API disconnected between normal three-second polls. Response
+silence now uses the fixed application deadline; record age alone uses the
+active policy stale interval.
+
 ## GREEN commands and results at `595ea60`
 
 ```bash
@@ -139,6 +162,15 @@ has SHA-256
 `68e272cdb09bc0b21a6f650f09ceccc1c9aa0d0ebbce9611f66233bf1aceb58e`.
 The binary contains the full
 `cf30577b83fc02a77150effbf2c80aa5db59b16e` source identity.
+
+At `a58ae2e`, `bash scripts/check_ui_markup.sh` passed. The executable contract
+requires one in-flight poll, `AbortController` with an 8-second deadline, a
+separate one-second watchdog, active-policy record-age staleness, visible
+freshness/transport/operator action, reload checks before response state or DOM
+updates, and bounded timer cleanup on `pagehide`. `bash scripts/run_host_tests.sh`
+also passed every executable, including policy 149, record manager 1,199, Web
+access 276, and request gate 2,201 checks. The pinned firmware/full repository
+gate was intentionally deferred to the owning final review.
 
 ## Independent RED replay against the base production tree
 
@@ -204,3 +236,20 @@ Observed on 2026-07-11: the UI/static command exited 1 with the exact missing
 `bpPolicyVersion` snapshot signature recorded above. Remove the disposable
 worktree with
 `git worktree remove --force /tmp/bp-task8-policy-reload-red`.
+
+The polling-liveness contract can be replayed against its direct pre-fix
+revision while retaining the old production Web handler:
+
+```bash
+git worktree add /tmp/bp-task8-poll-watchdog-red \
+  64af22d85964d77aac41948366d6fd4c79bec9e9
+git -C /tmp/bp-task8-poll-watchdog-red checkout \
+  a58ae2e709ca9ab5e40f47529f1f510ac466e7ae -- \
+  scripts/check_ui_markup.sh
+cd /tmp/bp-task8-poll-watchdog-red
+bash scripts/check_ui_markup.sh
+```
+
+Observed on 2026-07-11: the UI/static command exited 1 with the exact missing
+`AbortController` signature above. Remove the disposable worktree with
+`git worktree remove --force /tmp/bp-task8-poll-watchdog-red`.
