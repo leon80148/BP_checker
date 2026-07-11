@@ -61,6 +61,12 @@ the normal focused compile. It exits 1 because `lib/BoundedStreamConsumer.h`
 does not exist. At `184a0fb`, normal and ASan/UBSan focused runs pass 67 checks,
 and the full host runner includes the lifecycle test automatically.
 
+The callback re-entry review RED can be replayed by overlaying
+`72e7cab:test/host/test_bounded_stream_consumer.cpp` onto `00f15d7`. The
+focused run fails 4/82 checks because begin/write/finish report success after a
+nested `cancel()`, and finish resurrects the state as complete. At `72e7cab`,
+normal and ASan/UBSan focused runs pass all 82 checks.
+
 ## Bounded Binary HTTP Stream
 
 The production commit is `da220d1`. Its parent, `f43c855`, still rejects every
