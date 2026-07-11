@@ -92,6 +92,12 @@ compilation fails because the receipt type, fixed size, and codec do not exist.
 At `bf1a110`, normal and ASan/UBSan runs pass 602 checks, including one bit flip
 at every byte offset of the 480-byte receipt.
 
+The ESP32 runtime RED is `bash scripts/check_firmware_update_runtime.sh` at
+`7ae881d`; it exits 1 because `lib/FirmwareUpdateRuntime.h` is absent. At
+`281464e`, the static runtime contract passes and the pinned ESP32-S3 target
+compiles at 1,137,180 bytes (86%) with 72,572 bytes globals. The runtime remains
+unreachable until the administrator routes and sketch lifecycle are integrated.
+
 ## Bounded Binary HTTP Stream
 
 The production commit is `da220d1`. Its parent, `f43c855`, still rejects every
