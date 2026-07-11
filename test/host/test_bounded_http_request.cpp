@@ -10,6 +10,7 @@
 #include <new>
 #include <string>
 #include <type_traits>
+#include <vector>
 
 using namespace bp_http;
 
@@ -595,6 +596,364 @@ static void testTerminalStatesIgnoreAllFurtherInput() {
            "reject terminal state preserves first failure reason");
 }
 
+static void testPolicyTransitionAndSmallFormBody() {
+  BoundedHttpRequest request;
+  request.reset(100);
+  static const char headersAndBody[] =
+    "POST /claim HTTP/1.1\r\n"
+    "Host: bp.local\r\n"
+    "Content-Type: application/x-www-form-urlencoded\r\n"
+    "Content-Length: 16\r\n"
+    "\r\n"
+    "token=abc%2F1234PIPE";
+  const size_t bodyAndPipelineBytes = std::strlen("token=abc%2F1234PIPE");
+  const size_t headerBytes = sizeof(headersAndBody) - 1 - bodyAndPipelineBytes;
+  const ConsumeResult headerResult = request.consume(
+    reinterpret_cast<const uint8_t*>(headersAndBody),
+    sizeof(headersAndBody) - 1, 100);
+  CHECK_EQ(static_cast<int>(headerResult.state),
+           static_cast<int>(RequestState::WAIT_POLICY),
+           "headers wait for policy before body");
+  CHECK_EQ(headerResult.consumed, headerBytes,
+           "header reducer leaves same-packet body unread");
+  CHECK_TRUE(request.acceptPolicy(BodyMode::SMALL_FORM, 96, 101),
+             "authorized small form starts body state");
+  CHECK_EQ(static_cast<int>(request.state()),
+           static_cast<int>(RequestState::BODY),
+           "accepted policy transitions to body");
+  const ConsumeResult bodyResult = request.consume(
+    reinterpret_cast<const uint8_t*>(headersAndBody + headerBytes),
+    bodyAndPipelineBytes, 101);
+  CHECK_EQ(static_cast<int>(bodyResult.state),
+           static_cast<int>(RequestState::READY),
+           "exact form body reaches ready");
+  CHECK_EQ(bodyResult.consumed, 16UL,
+           "form parser stops before pipelined bytes");
+  CHECK_EQ(request.bodyLength(), 16UL, "exact body length exposed");
+  CHECK_STR(request.body(), "token=abc%2F1234", "bounded body captured");
+
+  BoundedHttpRequest noBody;
+  noBody.reset(200);
+  feedAll(noBody, "GET / HTTP/1.1\r\nHost: bp.local\r\n\r\n", 200);
+  CHECK_TRUE(noBody.acceptPolicy(BodyMode::NONE, 0, 201),
+             "bodyless policy accepted");
+  CHECK_EQ(static_cast<int>(noBody.state()),
+           static_cast<int>(RequestState::READY),
+           "bodyless request becomes ready immediately");
+}
+
+static BoundedHttpRequest* parsePostHeaders(
+    BoundedHttpRequest& request, const char* contentLength,
+    const char* contentType = "application/x-www-form-urlencoded") {
+  request.reset(300);
+  std::string input = "POST /claim HTTP/1.1\r\nHost: bp.local\r\n";
+  if (contentType != nullptr) {
+    input += std::string("Content-Type: ") + contentType + "\r\n";
+  }
+  if (contentLength != nullptr) {
+    input += std::string("Content-Length: ") + contentLength + "\r\n";
+  }
+  input += "\r\n";
+  feedAll(request, input, 300);
+  return &request;
+}
+
+static void testPolicyRejectsBodyBeforeReading() {
+  BoundedHttpRequest oversized;
+  parsePostHeaders(oversized, "17");
+  CHECK_TRUE(!oversized.acceptPolicy(BodyMode::SMALL_FORM, 16, 301),
+             "route cap rejects oversized body before read");
+  CHECK_EQ(static_cast<int>(oversized.state()),
+           static_cast<int>(RequestState::REJECT),
+           "oversized body enters reject state");
+  CHECK_EQ(static_cast<int>(oversized.error()),
+           static_cast<int>(RequestError::PAYLOAD_TOO_LARGE),
+           "oversized body has 413-class reason");
+
+  BoundedHttpRequest missingLength;
+  parsePostHeaders(missingLength, nullptr);
+  CHECK_TRUE(!missingLength.acceptPolicy(BodyMode::SMALL_FORM, 96, 301),
+             "body mode requires Content-Length");
+  CHECK_EQ(static_cast<int>(missingLength.error()),
+           static_cast<int>(RequestError::LENGTH_REQUIRED),
+           "missing body length has 411-class reason");
+
+  BoundedHttpRequest wrongType;
+  parsePostHeaders(wrongType, "1", "text/plain");
+  CHECK_TRUE(!wrongType.acceptPolicy(BodyMode::SMALL_FORM, 96, 301),
+             "wrong form media type rejected");
+  CHECK_EQ(static_cast<int>(wrongType.error()),
+           static_cast<int>(RequestError::UNSUPPORTED_MEDIA_TYPE),
+           "wrong media type has 415-class reason");
+
+  BoundedHttpRequest missingType;
+  parsePostHeaders(missingType, "1", nullptr);
+  CHECK_TRUE(!missingType.acceptPolicy(BodyMode::SMALL_FORM, 96, 301),
+             "missing form media type rejected");
+  CHECK_EQ(static_cast<int>(missingType.error()),
+           static_cast<int>(RequestError::UNSUPPORTED_MEDIA_TYPE),
+           "missing media type has 415-class reason");
+
+  BoundedHttpRequest invalidCap;
+  parsePostHeaders(invalidCap, "1");
+  CHECK_TRUE(!invalidCap.acceptPolicy(
+               BodyMode::SMALL_FORM,
+               BoundedHttpRequest::kSmallFormLimit + 1, 301),
+             "invalid route cap fails closed");
+  CHECK_EQ(static_cast<int>(invalidCap.error()),
+           static_cast<int>(RequestError::INVALID_POLICY),
+           "invalid route cap is an internal policy error");
+
+  BoundedHttpRequest unexpectedBody;
+  parsePostHeaders(unexpectedBody, "1");
+  CHECK_TRUE(!unexpectedBody.acceptPolicy(BodyMode::NONE, 0, 301),
+             "bodyless route rejects declared body");
+  CHECK_EQ(static_cast<int>(unexpectedBody.error()),
+           static_cast<int>(RequestError::PAYLOAD_TOO_LARGE),
+           "unexpected body has 413-class reason");
+
+  BoundedHttpRequest invalidNoneCap;
+  invalidNoneCap.reset(300);
+  feedAll(invalidNoneCap,
+          "GET / HTTP/1.1\r\nHost: bp.local\r\n\r\n", 300);
+  CHECK_TRUE(!invalidNoneCap.acceptPolicy(BodyMode::NONE, 1, 301),
+             "bodyless mode rejects nonzero route cap as misconfiguration");
+  CHECK_EQ(static_cast<int>(invalidNoneCap.error()),
+           static_cast<int>(RequestError::INVALID_POLICY),
+           "bodyless nonzero cap is an internal policy error");
+
+  BoundedHttpRequest corruptMode;
+  parsePostHeaders(corruptMode, "1");
+  CHECK_TRUE(!corruptMode.acceptPolicy(static_cast<BodyMode>(0xff), 96, 301),
+             "corrupt body mode fails closed");
+  CHECK_EQ(static_cast<int>(corruptMode.error()),
+           static_cast<int>(RequestError::INVALID_POLICY),
+           "corrupt body mode is an internal policy error");
+
+  CHECK_EQ(httpStatusForError(RequestError::LENGTH_REQUIRED), 411,
+           "length-required status mapping");
+  CHECK_EQ(httpStatusForError(RequestError::PAYLOAD_TOO_LARGE), 413,
+           "payload status mapping");
+  CHECK_EQ(httpStatusForError(RequestError::UNSUPPORTED_MEDIA_TYPE), 415,
+           "media-type status mapping");
+  CHECK_EQ(httpStatusForError(RequestError::INVALID_POLICY), 500,
+           "invalid-policy status mapping");
+}
+
+static void testSmallFormValidationFragmentationAndDeadline() {
+  const uint8_t invalidBytes[] = {0x00, 0x09, 0x0a, 0x0d, 0x1f, 0x7f};
+  for (uint8_t invalid : invalidBytes) {
+    BoundedHttpRequest request;
+    parsePostHeaders(request, "3");
+    CHECK_TRUE(request.acceptPolicy(BodyMode::SMALL_FORM, 3, 400),
+               "invalid-byte fixture enters body state");
+    const uint8_t body[] = {'a', invalid, 'b'};
+    const ConsumeResult result = request.consume(body, sizeof(body), 400);
+    CHECK_EQ(static_cast<int>(result.state),
+             static_cast<int>(RequestState::REJECT),
+             "raw form control byte rejected");
+    CHECK_EQ(static_cast<int>(request.error()),
+             static_cast<int>(RequestError::BAD_REQUEST),
+             "raw form control uses bad-request reason");
+    CHECK_EQ(request.bodyLength(), 0UL,
+             "rejected form securely clears partial body");
+  }
+
+  const std::string body = "token=" + std::string(58, 'x');
+  for (size_t cut = 0; cut <= body.size(); ++cut) {
+    BoundedHttpRequest request;
+    parsePostHeaders(request, "64");
+    CHECK_TRUE(request.acceptPolicy(BodyMode::SMALL_FORM, 64, 500),
+               "fragmentation fixture accepts policy");
+    size_t consumed = 0;
+    if (cut != 0) {
+      consumed += request.consume(
+        reinterpret_cast<const uint8_t*>(body.data()), cut, 500).consumed;
+    }
+    if (request.state() == RequestState::BODY) {
+      consumed += request.consume(
+        reinterpret_cast<const uint8_t*>(body.data() + cut),
+        body.size() - cut, 500).consumed;
+    }
+    CHECK_EQ(static_cast<int>(request.state()),
+             static_cast<int>(RequestState::READY),
+             "every form-body fragmentation cut succeeds");
+    CHECK_EQ(consumed, body.size(), "fragmented body consumes exact length");
+    CHECK_STR(request.body(), body.c_str(), "fragmented body preserved exactly");
+  }
+
+  BoundedHttpRequest budgeted;
+  parsePostHeaders(budgeted, "600");
+  CHECK_TRUE(budgeted.acceptPolicy(BodyMode::SMALL_FORM, 600, 600),
+             "large bounded form accepts policy");
+  const std::string largeBody(604, 'z');
+  ConsumeResult part = budgeted.consume(
+    reinterpret_cast<const uint8_t*>(largeBody.data()), largeBody.size(),
+    600, 1000);
+  CHECK_EQ(part.consumed, BoundedHttpRequest::kByteBudget,
+           "body read obeys hard per-tick budget");
+  CHECK_EQ(static_cast<int>(part.state), static_cast<int>(RequestState::BODY),
+           "partial budgeted body remains pending");
+  size_t offset = part.consumed;
+  while (budgeted.state() == RequestState::BODY) {
+    part = budgeted.consume(
+      reinterpret_cast<const uint8_t*>(largeBody.data() + offset),
+      largeBody.size() - offset, 600, 1000);
+    offset += part.consumed;
+  }
+  CHECK_EQ(offset, 600UL, "body stops before four pipelined bytes");
+  CHECK_EQ(static_cast<int>(budgeted.state()),
+           static_cast<int>(RequestState::READY),
+           "budgeted body eventually reaches ready");
+
+  BoundedHttpRequest slow;
+  parsePostHeaders(slow, "2");
+  CHECK_TRUE(slow.acceptPolicy(BodyMode::SMALL_FORM, 2, 1000),
+             "slow body fixture accepts policy");
+  const uint8_t one = 'a';
+  CHECK_EQ(slow.consume(&one, 1, 2499).consumed, 1UL,
+           "body progress before deadline accepted");
+  const ConsumeResult timeout = slow.consume(&one, 1, 2500);
+  CHECK_EQ(timeout.consumed, 0UL,
+           "absolute body deadline rejects before next byte");
+  CHECK_EQ(static_cast<int>(slow.error()),
+           static_cast<int>(RequestError::TIMEOUT),
+           "body trickle does not reset absolute deadline");
+  CHECK_EQ(slow.bodyLength(), 0UL, "timeout securely clears partial form body");
+
+  const uint32_t wrappedStart = std::numeric_limits<uint32_t>::max() - 749U;
+  BoundedHttpRequest wrapped;
+  parsePostHeaders(wrapped, "1");
+  CHECK_TRUE(wrapped.acceptPolicy(BodyMode::SMALL_FORM, 1, wrappedStart),
+             "wrapped body fixture accepts policy");
+  const ConsumeResult wrappedTimeout =
+    wrapped.consume(&one, 1, wrappedStart + 1500U);
+  CHECK_EQ(static_cast<int>(wrappedTimeout.state),
+           static_cast<int>(RequestState::REJECT),
+           "body deadline remains correct across clock wrap");
+  CHECK_EQ(static_cast<int>(wrapped.error()),
+           static_cast<int>(RequestError::TIMEOUT),
+           "wrapped body deadline preserves timeout reason");
+}
+
+static void testFixedChunkStreamingBody() {
+  BoundedHttpRequest stream;
+  parsePostHeaders(stream, "600", "application/octet-stream");
+  CHECK_TRUE(stream.acceptPolicy(BodyMode::STREAM, 600, 700),
+             "authorized stream enters body state");
+  CHECK_EQ(static_cast<int>(stream.state()),
+           static_cast<int>(RequestState::BODY),
+           "stream waits for fixed chunks");
+
+  std::vector<uint8_t> input(604);
+  for (size_t i = 0; i < 600; ++i) {
+    input[i] = static_cast<uint8_t>(i & 0xffU);
+  }
+  input[600] = 'P';
+  input[601] = 'I';
+  input[602] = 'P';
+  input[603] = 'E';
+  std::vector<uint8_t> reconstructed;
+  size_t offset = 0;
+  while (stream.state() == RequestState::BODY) {
+    const ConsumeResult part = stream.consume(
+      input.data() + offset, input.size() - offset, 700, 1000);
+    CHECK_TRUE(part.consumed <= BoundedHttpRequest::kStreamChunkLimit,
+               "stream chunk never exceeds fixed capacity");
+    offset += part.consumed;
+    CHECK_EQ(stream.streamChunkLength(), part.consumed,
+             "pending stream chunk length matches socket consumption");
+    const ConsumeResult blocked = stream.consume(
+      input.data() + offset, input.size() - offset, 700, 1000);
+    CHECK_EQ(blocked.consumed, 0UL,
+             "undrained stream chunk applies backpressure");
+    reconstructed.insert(reconstructed.end(), stream.streamChunk(),
+                         stream.streamChunk() + stream.streamChunkLength());
+    const size_t drainedLength = stream.streamChunkLength();
+    CHECK_TRUE(stream.drainStreamChunk(), "consumer drains pending chunk");
+    CHECK_EQ(stream.streamChunkLength(), 0UL,
+             "drain clears pending chunk length");
+    for (size_t i = 0; i < drainedLength; ++i) {
+      CHECK_EQ(stream.streamChunk()[i], static_cast<uint8_t>(0),
+               "drain securely clears binary chunk bytes");
+    }
+  }
+  CHECK_EQ(offset, 600UL, "stream stops before pipelined bytes");
+  CHECK_EQ(reconstructed.size(), 600UL,
+           "stream reconstructs exact declared body length");
+  CHECK_TRUE(std::memcmp(reconstructed.data(), input.data(), 600) == 0,
+             "stream preserves arbitrary binary bytes including NUL");
+  CHECK_EQ(stream.receivedBodyLength(), 600UL,
+           "stream exposes total received length");
+  CHECK_EQ(stream.bodyLength(), 0UL,
+           "stream bytes are never exposed as small-form body");
+  CHECK_STR(stream.body(), "", "stream has no materialized form string");
+  CHECK_EQ(static_cast<int>(stream.state()),
+           static_cast<int>(RequestState::READY),
+           "final drain makes stream request ready");
+
+  BoundedHttpRequest capped;
+  parsePostHeaders(capped, "601", "application/octet-stream");
+  CHECK_TRUE(!capped.acceptPolicy(BodyMode::STREAM, 600, 700),
+             "stream route cap rejects before body read");
+  CHECK_EQ(static_cast<int>(capped.error()),
+           static_cast<int>(RequestError::PAYLOAD_TOO_LARGE),
+           "oversized stream has 413-class reason");
+
+  BoundedHttpRequest missingLength;
+  parsePostHeaders(missingLength, nullptr, "application/octet-stream");
+  CHECK_TRUE(!missingLength.acceptPolicy(BodyMode::STREAM, 600, 700),
+             "stream requires explicit Content-Length");
+  CHECK_EQ(static_cast<int>(missingLength.error()),
+           static_cast<int>(RequestError::LENGTH_REQUIRED),
+           "missing stream length has 411-class reason");
+}
+
+static void testBodyBuffersAreSecurelyCleared() {
+  static const char form[] = "bootstrap=secret42";
+  static_assert(sizeof(form) - 1 == 18, "body wipe fixture length");
+
+  BoundedHttpRequest reset;
+  parsePostHeaders(reset, "18");
+  CHECK_TRUE(reset.acceptPolicy(BodyMode::SMALL_FORM, 18, 800),
+             "body wipe fixture accepts policy");
+  (void)reset.consume(reinterpret_cast<const uint8_t*>(form),
+                      sizeof(form) - 1, 800);
+  CHECK_TRUE(objectContains(&reset, sizeof(reset), "secret42"),
+             "ready form exists before reset");
+  reset.reset(801);
+  CHECK_TRUE(!objectContains(&reset, sizeof(reset), "secret42"),
+             "reset clears ready form body");
+
+  BoundedHttpRequest rejected;
+  parsePostHeaders(rejected, "18");
+  CHECK_TRUE(rejected.acceptPolicy(BodyMode::SMALL_FORM, 18, 900),
+             "partial body fixture accepts policy");
+  (void)rejected.consume(reinterpret_cast<const uint8_t*>(form), 12, 900);
+  CHECK_TRUE(objectContains(&rejected, sizeof(rejected), "bootstrap="),
+             "partial form exists before rejection");
+  (void)rejected.consume(nullptr, 0, 2400);
+  CHECK_EQ(static_cast<int>(rejected.error()),
+           static_cast<int>(RequestError::TIMEOUT),
+           "partial form times out");
+  CHECK_TRUE(!objectContains(&rejected, sizeof(rejected), "bootstrap="),
+             "reject clears partial form body");
+
+  alignas(BoundedHttpRequest) uint8_t storage[sizeof(BoundedHttpRequest)];
+  std::memset(storage, 0xa5, sizeof(storage));
+  auto* placed = ::new (static_cast<void*>(storage)) BoundedHttpRequest();
+  parsePostHeaders(*placed, "18");
+  CHECK_TRUE(placed->acceptPolicy(BodyMode::SMALL_FORM, 18, 1000),
+             "destructor body fixture accepts policy");
+  (void)placed->consume(reinterpret_cast<const uint8_t*>(form),
+                        sizeof(form) - 1, 1000);
+  CHECK_TRUE(objectContains(storage, sizeof(storage), "secret42"),
+             "body exists before destruction");
+  placed->~BoundedHttpRequest();
+  CHECK_TRUE(!objectContains(storage, sizeof(storage), "secret42"),
+             "destructor clears form body backing storage");
+}
+
 static void testNoAllocationAndDeterministicFuzz() {
   static_assert(sizeof(BoundedHttpRequest) <= 4096,
                 "request reducer has a bounded stack/static footprint");
@@ -618,6 +977,47 @@ static void testNoAllocationAndDeterministicFuzz() {
   CHECK_EQ(static_cast<int>(request.state()),
            static_cast<int>(RequestState::WAIT_POLICY),
            "allocation-free valid parse reaches policy gate");
+
+  BoundedHttpRequest formRequest;
+  parsePostHeaders(formRequest, "3");
+  static const uint8_t formBody[] = {'a', '=', 'b'};
+  threw = false;
+  gDeniedAllocationCalls = 0;
+  gDenyAllocations = true;
+  try {
+    (void)formRequest.acceptPolicy(BodyMode::SMALL_FORM, 3, 20);
+    (void)formRequest.consume(formBody, sizeof(formBody), 20);
+  } catch (const std::bad_alloc&) {
+    threw = true;
+  }
+  gDenyAllocations = false;
+  CHECK_TRUE(!threw, "small-form policy and body parse without allocation");
+  CHECK_EQ(gDeniedAllocationCalls, 0UL,
+           "small-form body performs no allocation attempt");
+  CHECK_EQ(static_cast<int>(formRequest.state()),
+           static_cast<int>(RequestState::READY),
+           "allocation-free form reaches ready");
+
+  BoundedHttpRequest streamRequest;
+  parsePostHeaders(streamRequest, "3", "application/octet-stream");
+  static const uint8_t binaryBody[] = {0x00, 0x7f, 0xff};
+  threw = false;
+  gDeniedAllocationCalls = 0;
+  gDenyAllocations = true;
+  try {
+    (void)streamRequest.acceptPolicy(BodyMode::STREAM, 3, 30);
+    (void)streamRequest.consume(binaryBody, sizeof(binaryBody), 30);
+    (void)streamRequest.drainStreamChunk();
+  } catch (const std::bad_alloc&) {
+    threw = true;
+  }
+  gDenyAllocations = false;
+  CHECK_TRUE(!threw, "stream policy, chunk, and drain avoid allocation");
+  CHECK_EQ(gDeniedAllocationCalls, 0UL,
+           "stream body performs no allocation attempt");
+  CHECK_EQ(static_cast<int>(streamRequest.state()),
+           static_cast<int>(RequestState::READY),
+           "allocation-free stream reaches ready");
 
   uint32_t random = 0x8f3a21c7U;
   uint8_t bytes[600] = {};
@@ -664,6 +1064,11 @@ int main() {
   testStableErrorClassification();
   testSensitiveBuffersAreSecurelyCleared();
   testTerminalStatesIgnoreAllFurtherInput();
+  testPolicyTransitionAndSmallFormBody();
+  testPolicyRejectsBodyBeforeReading();
+  testSmallFormValidationFragmentationAndDeadline();
+  testFixedChunkStreamingBody();
+  testBodyBuffersAreSecurelyCleared();
   testNoAllocationAndDeterministicFuzz();
   return testReport();
 }

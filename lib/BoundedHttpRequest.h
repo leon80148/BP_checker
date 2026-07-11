@@ -11,7 +11,15 @@ enum class RequestState : uint8_t {
   REQUEST_LINE,
   HEADERS,
   WAIT_POLICY,
+  BODY,
+  READY,
   REJECT,
+};
+
+enum class BodyMode : uint8_t {
+  NONE,
+  SMALL_FORM,
+  STREAM,
 };
 
 enum class RequestMethod : uint8_t {
@@ -31,6 +39,10 @@ enum class RequestError : uint8_t {
   INVALID_CONTENT_LENGTH,
   TRANSFER_ENCODING_NOT_SUPPORTED,
   EXPECTATION_FAILED,
+  LENGTH_REQUIRED,
+  PAYLOAD_TOO_LARGE,
+  UNSUPPORTED_MEDIA_TYPE,
+  INVALID_POLICY,
 };
 
 constexpr int httpStatusForError(RequestError error) {
@@ -47,6 +59,12 @@ constexpr int httpStatusForError(RequestError error) {
       return 405;
     case RequestError::EXPECTATION_FAILED:
       return 417;
+    case RequestError::LENGTH_REQUIRED:
+      return 411;
+    case RequestError::PAYLOAD_TOO_LARGE:
+      return 413;
+    case RequestError::UNSUPPORTED_MEDIA_TYPE:
+      return 415;
     case RequestError::REQUEST_LINE_TOO_LONG:
       return 414;
     case RequestError::HEADER_FIELDS_TOO_LARGE:
@@ -55,6 +73,8 @@ constexpr int httpStatusForError(RequestError error) {
       return 501;
     case RequestError::VERSION_NOT_SUPPORTED:
       return 505;
+    case RequestError::INVALID_POLICY:
+      return 500;
   }
   return 500;
 }
@@ -84,7 +104,10 @@ public:
   static constexpr size_t kHeaderTotalLimit = 2048;
   static constexpr size_t kHeaderCountLimit = 24;
   static constexpr size_t kByteBudget = 256;
+  static constexpr size_t kSmallFormLimit = 1024;
+  static constexpr size_t kStreamChunkLimit = 256;
   static constexpr uint32_t kHeaderDeadlineMs = 1500;
+  static constexpr uint32_t kBodyDeadlineMs = 1500;
 
   BoundedHttpRequest() { reset(0); }
 
@@ -94,6 +117,8 @@ public:
   ~BoundedHttpRequest() {
     secureZero(&_view, sizeof(_view));
     secureZero(_line, sizeof(_line));
+    secureZero(_body, sizeof(_body));
+    secureZero(_streamChunk, sizeof(_streamChunk));
   }
 
   void reset(uint32_t nowMs) {
@@ -110,17 +135,123 @@ public:
     _contentTypeSeen = false;
     _headerBytes = 0;
     _headerCount = 0;
+    _bodyLength = 0;
+    _bodyMode = BodyMode::NONE;
+    _bodyStartedAt = 0;
+    _streamChunkLength = 0;
     secureZero(_line, sizeof(_line));
     secureZero(&_view, sizeof(_view));
+    secureZero(_body, sizeof(_body));
+    secureZero(_streamChunk, sizeof(_streamChunk));
     _view.method = RequestMethod::GET;
+  }
+
+  bool acceptPolicy(BodyMode mode, size_t routeBodyCap, uint32_t nowMs) {
+    if (_state != RequestState::WAIT_POLICY) return false;
+    if (mode == BodyMode::NONE) {
+      if (routeBodyCap != 0) {
+        reject(RequestError::INVALID_POLICY);
+        return false;
+      }
+      if (_view.hasContentLength && _view.contentLength != 0) {
+        reject(RequestError::PAYLOAD_TOO_LARGE);
+        return false;
+      }
+      _bodyMode = mode;
+      _state = RequestState::READY;
+      return true;
+    }
+    if (mode != BodyMode::SMALL_FORM && mode != BodyMode::STREAM) {
+      reject(RequestError::INVALID_POLICY);
+      return false;
+    }
+    if (mode == BodyMode::SMALL_FORM && routeBodyCap > kSmallFormLimit) {
+      reject(RequestError::INVALID_POLICY);
+      return false;
+    }
+    if (!_view.hasContentLength) {
+      reject(RequestError::LENGTH_REQUIRED);
+      return false;
+    }
+    if (_view.contentLength > routeBodyCap ||
+        (mode == BodyMode::SMALL_FORM &&
+         _view.contentLength > kSmallFormLimit)) {
+      reject(RequestError::PAYLOAD_TOO_LARGE);
+      return false;
+    }
+    if (mode == BodyMode::SMALL_FORM) {
+      static constexpr char kFormContentType[] =
+        "application/x-www-form-urlencoded";
+      if (!nameEquals(_view.contentType, std::strlen(_view.contentType),
+                      kFormContentType)) {
+        reject(RequestError::UNSUPPORTED_MEDIA_TYPE);
+        return false;
+      }
+    }
+    _bodyMode = mode;
+    _bodyStartedAt = nowMs;
+    _state = _view.contentLength == 0
+      ? RequestState::READY : RequestState::BODY;
+    return true;
   }
 
   ConsumeResult consume(const uint8_t* data, size_t length, uint32_t nowMs,
                         size_t budget = kByteBudget) {
     size_t consumed = 0;
     if (_state == RequestState::WAIT_POLICY ||
+        _state == RequestState::READY ||
         _state == RequestState::REJECT) {
       return {0, _state};
+    }
+    if (_state == RequestState::BODY) {
+      if (static_cast<uint32_t>(nowMs - _bodyStartedAt) >=
+          kBodyDeadlineMs) {
+        reject(RequestError::TIMEOUT);
+        return {0, _state};
+      }
+      if (data == nullptr && length != 0) {
+        reject(RequestError::BAD_REQUEST);
+        return {0, _state};
+      }
+      if (budget > kByteBudget) budget = kByteBudget;
+      size_t remaining = static_cast<size_t>(_view.contentLength) -
+                         _bodyLength;
+      if (_bodyMode == BodyMode::STREAM && _streamChunkLength != 0) {
+        return {0, _state};
+      }
+      size_t take = length;
+      if (take > budget) take = budget;
+      if (take > remaining) take = remaining;
+      if (_bodyMode == BodyMode::STREAM && take > kStreamChunkLimit) {
+        take = kStreamChunkLimit;
+      }
+      if (take != 0) {
+        for (size_t i = 0; i < take; ++i) {
+          const uint8_t value = data[i];
+          if (_bodyMode == BodyMode::SMALL_FORM &&
+              (value < 0x20U || value == 0x7fU)) {
+            consumed = i + 1;
+            reject(RequestError::BAD_REQUEST);
+            return {consumed, _state};
+          }
+        }
+        if (_bodyMode == BodyMode::STREAM) {
+          std::memcpy(_streamChunk, data, take);
+          _streamChunkLength = take;
+          _bodyLength += take;
+          consumed = take;
+        } else {
+          std::memcpy(_body + _bodyLength, data, take);
+          _bodyLength += take;
+          consumed = take;
+          _body[_bodyLength] = '\0';
+        }
+      }
+      if (_bodyMode != BodyMode::STREAM &&
+          _bodyLength == static_cast<size_t>(_view.contentLength)) {
+        _state = RequestState::READY;
+      }
+      return {consumed, _state};
     }
     if ((_state == RequestState::REQUEST_LINE ||
          _state == RequestState::HEADERS) &&
@@ -183,6 +314,26 @@ public:
   RequestState state() const { return _state; }
   RequestError error() const { return _error; }
   const RequestView& view() const { return _view; }
+  const char* body() const { return _body; }
+  size_t bodyLength() const {
+    return _bodyMode == BodyMode::SMALL_FORM ? _bodyLength : 0;
+  }
+  size_t receivedBodyLength() const { return _bodyLength; }
+  const uint8_t* streamChunk() const { return _streamChunk; }
+  size_t streamChunkLength() const { return _streamChunkLength; }
+
+  bool drainStreamChunk() {
+    if (_state != RequestState::BODY || _bodyMode != BodyMode::STREAM ||
+        _streamChunkLength == 0) {
+      return false;
+    }
+    secureZero(_streamChunk, sizeof(_streamChunk));
+    _streamChunkLength = 0;
+    if (_bodyLength == static_cast<size_t>(_view.contentLength)) {
+      _state = RequestState::READY;
+    }
+    return true;
+  }
 
 private:
   RequestState _state = RequestState::REQUEST_LINE;
@@ -200,13 +351,23 @@ private:
   size_t _headerBytes = 0;
   size_t _headerCount = 0;
   uint32_t _startedAt = 0;
+  char _body[kSmallFormLimit + 1] = {};
+  size_t _bodyLength = 0;
+  BodyMode _bodyMode = BodyMode::NONE;
+  uint32_t _bodyStartedAt = 0;
+  uint8_t _streamChunk[kStreamChunkLimit] = {};
+  size_t _streamChunkLength = 0;
 
   void reject(RequestError error) {
     _error = error;
     _state = RequestState::REJECT;
     secureZero(&_view, sizeof(_view));
     secureZero(_line, sizeof(_line));
+    secureZero(_body, sizeof(_body));
+    secureZero(_streamChunk, sizeof(_streamChunk));
     _lineLength = 0;
+    _bodyLength = 0;
+    _streamChunkLength = 0;
     _sawCarriageReturn = false;
   }
 
