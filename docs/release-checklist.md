@@ -11,6 +11,9 @@ not approval for deployment.
   maximum; credential, factory, and decommission resets must not lower it.
 - Set `BP_RELEASE_PUBLIC_KEY_DER_HEX` to the approved P-256 public SPKI DER hex.
   Never place the private key in this repository, firmware, workflow, or logs.
+  Review the DER file SHA-256 into
+  `config/evidence-trust-anchors.json` as `release_public_key_der_sha256`;
+  candidate signing and later HIL verification reject an empty/mismatched pin.
 - Run `scripts/package_release.sh --candidate`. Record the bundle path, source
   SHA, SBOM, firmware SHA-256, size, quality-gate approval, and emitted
   `candidate_checksums_sha256`. Transfer that digest to the signing approver by

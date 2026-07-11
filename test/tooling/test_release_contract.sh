@@ -58,6 +58,12 @@ grep -Fq 'trust_anchor_sha256' scripts/generate_sbom.sh || {
   echo "SBOM must bind the release trust anchor" >&2
   exit 1
 }
+for file in scripts/package_release.sh scripts/verify_signed_release.sh; do
+  grep -Fq 'release_public_key_der_sha256' "$file" || {
+    echo "release verifier must pin the approved public key: $file" >&2
+    exit 1
+  }
+done
 if grep -Eq '(^|[[:space:]])eval([[:space:]]|$)' "$package"; then
   echo "release signer must not be invoked through eval" >&2
   exit 1

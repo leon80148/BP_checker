@@ -244,12 +244,22 @@ sign_candidate() {
     if command -v sha256sum >/dev/null; then sha256sum; else shasum -a 256; fi
   } | awk '{print $1}')
   recorded_anchor_sha=$(jq -r '.trust_anchor_sha256' "$bundle/release.json")
+  local release_public_key_der_sha256 approved_release_public_key_der_sha256
+  release_public_key_der_sha256=$(sha256_file "$bundle/release-public-key.der")
+  approved_release_public_key_der_sha256=$(
+    jq -r '.release_public_key_der_sha256' config/evidence-trust-anchors.json
+  )
   if [[ "$anchor_sha" != "$recorded_anchor_sha" ]] ||
      ! jq -e --arg anchor_sha "$anchor_sha" '
        .firmware.trust_anchor_configured == true and
        .firmware.trust_anchor_sha256 == $anchor_sha
      ' "$bundle/sbom.json" >/dev/null; then
     echo "candidate trust anchor binding failed" >&2
+    exit 1
+  fi
+  if [[ ! "$approved_release_public_key_der_sha256" =~ ^[0-9a-f]{64}$ ]] ||
+     [[ "$release_public_key_der_sha256" != "$approved_release_public_key_der_sha256" ]]; then
+    echo "candidate release public key is not the reviewed trust anchor" >&2
     exit 1
   fi
 

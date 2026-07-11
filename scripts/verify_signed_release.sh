@@ -76,6 +76,14 @@ cmp -s "$expected_manifest" "$bundle/manifest.txt" || {
 
 anchor_hex=$(xxd -p -c 1000 "$bundle/release-public-key.der" | tr -d '\r\n')
 anchor_sha=$(printf '%s' "$anchor_hex" | sha256_stream)
+release_public_key_der_sha256=$(sha256_file "$bundle/release-public-key.der")
+approved_release_public_key_der_sha256=$(
+  jq -r '.release_public_key_der_sha256' config/evidence-trust-anchors.json
+)
+[[ "$approved_release_public_key_der_sha256" =~ ^[0-9a-f]{64}$ &&
+   "$release_public_key_der_sha256" == "$approved_release_public_key_der_sha256" ]] || {
+  echo "signed bundle release key is not the reviewed trust anchor" >&2; exit 1;
+}
 [[ "$anchor_sha" == "$(jq -r '.trust_anchor_sha256' "$release_json")" ]] || {
   echo "signed bundle trust anchor mismatch" >&2; exit 1;
 }
