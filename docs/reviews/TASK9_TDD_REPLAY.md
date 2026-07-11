@@ -107,6 +107,10 @@ on `7e51ad6`; it exits 1 on missing `esp_partition_read`. At `b92863d`, the
 contract requires running-partition hash verification before pending health and
 receipt cleanup before mark-valid; the target compiles at 1,137,212 bytes.
 
+The pending-state ordering RED is the runtime contract on `71f6874`; it exits 1
+because sequence NVS loads before `_pendingVerify` is latched. At `cce4ffa`, the
+contract and pinned compile pass with bootloader state read first.
+
 ## Bounded Binary HTTP Stream
 
 The production commit is `da220d1`. Its parent, `f43c855`, still rejects every
