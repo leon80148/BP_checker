@@ -31,6 +31,7 @@ bash scripts/check_bounded_web_runtime.sh
 bash scripts/check_security_runtime_integration.sh
 bash scripts/check_firmware_update_runtime.sh
 bash test/tooling/test_release_contract.sh
+bash test/tooling/test_vulnerability_response.sh
 bash scripts/run_host_tests.sh
 bash scripts/run_concurrency_stress.sh
 
