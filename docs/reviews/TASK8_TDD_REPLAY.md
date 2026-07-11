@@ -4,6 +4,7 @@
 
 - Initial Task 8 implementation: `02ff21b9647d9f95e05f50830458c03417ce3ef8`
 - Spec-review fix: `595ea60bb93549062de377604f05bd3abf8ec506`
+- Policy-version dashboard fix: `cf30577b83fc02a77150effbf2c80aa5db59b16e`
 - Toolchain: Arduino CLI 1.4.1, ESP32 core 3.3.7, ArduinoJson 7.4.2,
   host C++17 compiler; run date 2026-07-11.
 
@@ -92,6 +93,19 @@ storage failure leaves no accidentally usable policy  (got 0, want 1)
 FAILED: 2/149 checks failed.
 ```
 
+### Policy-version dashboard reload
+
+After adding the focused UI/static contract over the pre-fix dashboard,
+`bash scripts/check_ui_markup.sh` exited 1 with:
+
+```text
+missing policy-version dashboard reload contract: html += "';let bpPolicyVersion='";
+```
+
+This failure demonstrated that the page had no snapshot of the active policy
+version and could not reload when `/api/latest` changed policy without changing
+the measurement revision.
+
 ## GREEN commands and results at `595ea60`
 
 ```bash
@@ -114,6 +128,17 @@ Observed final results:
   `82c1b488d1c4dd490f1d827a04df929ea0a2361898b7032dfb3d94098c3d5e5e`.
 - `strings build/firmware/BP_checker.ino.bin` contains the full
   `595ea60bb93549062de377604f05bd3abf8ec506` source identity.
+
+At `cf30577`, `bash scripts/check_ui_markup.sh` passed after requiring the
+active policy-version snapshot, decimal-string comparison immediately after
+JSON parsing, and reload before dashboard state updates. The complete clean
+`bash scripts/run_quality_gate.sh` also passed: every host/static/stress/TSan
+stage, pinned firmware, and SBOM generation. The sketch is 1,131,380 bytes
+(86%), globals are 72,524 bytes (22%), and the 1,131,536-byte firmware artifact
+has SHA-256
+`68e272cdb09bc0b21a6f650f09ceccc1c9aa0d0ebbce9611f66233bf1aceb58e`.
+The binary contains the full
+`cf30577b83fc02a77150effbf2c80aa5db59b16e` source identity.
 
 ## Independent RED replay against the base production tree
 
@@ -161,3 +186,21 @@ Expected: all three final commands exit nonzero with the missing clock/store,
 16-vs-18 route/surface, and main-loop/static failure classes recorded above.
 Remove the disposable worktree afterward with
 `git worktree remove --force /tmp/bp-task8-red`.
+
+Finally, the policy-version reload contract can be replayed against the direct
+pre-fix revision while leaving its production Web handler unchanged:
+
+```bash
+git worktree add /tmp/bp-task8-policy-reload-red \
+  6dbcf558aaf8833a24d4f21eb270c8d0a8b991dc
+git -C /tmp/bp-task8-policy-reload-red checkout \
+  cf30577b83fc02a77150effbf2c80aa5db59b16e -- \
+  scripts/check_ui_markup.sh
+cd /tmp/bp-task8-policy-reload-red
+bash scripts/check_ui_markup.sh
+```
+
+Observed on 2026-07-11: the UI/static command exited 1 with the exact missing
+`bpPolicyVersion` snapshot signature recorded above. Remove the disposable
+worktree with
+`git worktree remove --force /tmp/bp-task8-policy-reload-red`.
