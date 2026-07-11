@@ -54,7 +54,8 @@ done
 
 load_line=$(grep -nF 'const bool historyLoaded = recordManager.loadFromStorage();' "$SKETCH" | head -1 | cut -d: -f1)
 failure_line=$(grep -nF 'history_load_failed' "$SKETCH" | head -1 | cut -d: -f1)
-return_line=$(awk -v start="$failure_line" 'NR > start && /return;/ { print NR; exit }' "$SKETCH")
+return_line=$(awk -v start="$failure_line" \
+  'NR > start && /return( false)?;/ { print NR; exit }' "$SKETCH")
 success_line=$(grep -nF 'history_load_succeeded count=' "$SKETCH" | head -1 | cut -d: -f1)
 if [[ -z "$return_line" || ! (load_line -lt failure_line && failure_line -lt return_line && return_line -lt success_line) ]]; then
   echo "startup storage failure must return before the normal loaded claim" >&2
