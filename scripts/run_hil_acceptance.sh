@@ -24,6 +24,7 @@ cd "$ROOT"
   echo "invalid monitor identifier" >&2; exit 2;
 }
 [[ -d "$BP_HIL_RELEASE_BUNDLE" ]] || { echo "signed HIL release bundle is missing" >&2; exit 2; }
+bash scripts/verify_signed_release.sh "$BP_HIL_RELEASE_BUNDLE" >/dev/null
 release_json="$BP_HIL_RELEASE_BUNDLE/release.json"
 firmware="$BP_HIL_RELEASE_BUNDLE/firmware.bin"
 [[ -s "$release_json" && -s "$firmware" ]] || { echo "signed HIL release bundle is incomplete" >&2; exit 2; }

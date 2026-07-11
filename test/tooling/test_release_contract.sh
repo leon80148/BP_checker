@@ -8,6 +8,7 @@ for file in \
   scripts/package_release.sh \
   scripts/run_browser_checks.sh \
   scripts/run_hil_acceptance.sh \
+  scripts/verify_signed_release.sh \
   docs/release-checklist.md \
   docs/compatibility.md \
   docs/reviews/hil/README.md \
@@ -19,13 +20,18 @@ do
   }
 done
 
-for script in scripts/package_release.sh scripts/run_browser_checks.sh scripts/run_hil_acceptance.sh; do
+for script in scripts/package_release.sh scripts/run_browser_checks.sh scripts/run_hil_acceptance.sh scripts/verify_signed_release.sh; do
   test -x "$script" || { echo "release script is not executable: $script" >&2; exit 1; }
   if "$script" > /dev/null 2>&1; then
     echo "release evidence script must fail closed without required inputs: $script" >&2
     exit 1
   fi
 done
+
+grep -Fq 'scripts/verify_signed_release.sh "$BP_HIL_RELEASE_BUNDLE"' scripts/run_hil_acceptance.sh || {
+  echo "HIL must verify the signed release bundle" >&2
+  exit 1
+}
 
 package=scripts/package_release.sh
 for token in \

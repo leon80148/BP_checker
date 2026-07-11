@@ -337,6 +337,7 @@ sign_candidate() {
   mv "$bundle" "$signed_bundle"
   trap - EXIT
   chmod -R a-w "$signed_bundle"
+  bash scripts/verify_signed_release.sh "$signed_bundle" >/dev/null
   echo "$signed_bundle"
 }
 
