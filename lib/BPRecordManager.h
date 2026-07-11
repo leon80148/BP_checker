@@ -35,6 +35,8 @@ private:
   bool _stateReady = false;
   bool _storageHealthy = false;
   bool _sequenceExhausted = false;
+  uint64_t _lastSuccessfulRecordSequence = 0;
+  uint32_t _lastSuccessfulReceiveMs = 0;
   Preferences _preferences;
 
   struct Candidate {
@@ -721,7 +723,10 @@ public:
       return false;
     }
 
+    const uint64_t acceptedSequence = record.recordSequence;
     appendChronological(std::move(record));
+    _lastSuccessfulRecordSequence = acceptedSequence;
+    _lastSuccessfulReceiveMs = static_cast<uint32_t>(millis());
     _nextSequence++;
     return true;
   }
@@ -737,6 +742,23 @@ public:
   const BPData& getLatestRecord() const { return getRecord(0); }
   int getRecordCount() const { return _recordCount; }
   int getMaxRecords() const { return _maxRecords; }
+
+  // recordSequence is the durable, opaque revision. It remains monotonic when
+  // the storage ring wraps and does not introduce a second rollover domain.
+  uint64_t getRevision() const {
+    return _recordCount > 0 ? getLatestRecord().recordSequence : 0;
+  }
+
+  bool latestReceivedThisBoot() const {
+    return _recordCount > 0 && _lastSuccessfulRecordSequence != 0 &&
+      getLatestRecord().recordSequence == _lastSuccessfulRecordSequence;
+  }
+
+  bool lastSuccessfulReceiveAgeMs(uint32_t nowMs, uint32_t& ageMs) const {
+    if (!latestReceivedThisBoot()) return false;
+    ageMs = nowMs - _lastSuccessfulReceiveMs;
+    return true;
+  }
 
   bool clearRecords() {
     if (!_stateReady || !_storageHealthy) {
@@ -771,6 +793,8 @@ public:
   }
 
   bool loadFromStorage() {
+    _lastSuccessfulRecordSequence = 0;
+    _lastSuccessfulReceiveMs = 0;
     resetRecords();
     _stateReady = false;
     _storageHealthy = false;

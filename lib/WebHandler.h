@@ -9,7 +9,10 @@
 #include "BP_Parser.h"
 #include "CsvExport.h"
 #include "DeviceSecurity.h"
+#include "BuildInfo.h"
+#include "MeasurementPolicy.h"
 #include "WebAccessPolicy.h"
+#include "transports/MonitorTransport.h"
 
 // 處理網頁請求的類
 class WebHandler {
@@ -23,6 +26,7 @@ private:
   String* lastData;
   String* transportName;
   String* transportStatus;
+  MonitorTransport* monitorTransport;
   // 全域 ap_*/hostname 是 const char* 編譯期常數（bp_checker.ino），
   // 用單層 const char* 即可，省一層 indirection
   const char* hostname;
@@ -43,21 +47,69 @@ private:
     return result == DeviceSecurityResult::OK;
   }
 
-  bool isSystolicAbnormal(int value) const {
-    return value > 130 || value < 90;
+  static void appendUInt64(String& out, uint64_t value) {
+    char encoded[24];
+    if (formatOpaqueSequence(value, encoded, sizeof(encoded))) {
+      out += encoded;
+    }
   }
 
-  bool isDiastolicAbnormal(int value) const {
-    return value > 80 || value < 50;
+  static void setUInt64Json(JsonVariant target, uint64_t value) {
+    char encoded[24];
+    if (formatOpaqueSequence(value, encoded, sizeof(encoded))) {
+      // A mutable char buffer is duplicated into the JsonDocument. Keeping
+      // the value as decimal text preserves the full uint64 range in JS.
+      target.set(encoded);
+    } else {
+      target.set(nullptr);
+    }
   }
 
-  bool isPulseAbnormal(int value) const {
-    return value > 100 || value < 60;
+  const char* reviewClass(MeasurementReviewState state) const {
+    if (state == MeasurementReviewState::INVALID) return "value-na";
+    return state == MeasurementReviewState::WITHIN_REFERENCE
+      ? "value-good" : "value-bad";
   }
 
-  // 回傳 string literal 不配置 String；renderTableValueCell/renderKpiCard 都是 += 用法
-  const char* valueClass(bool abnormal) const {
-    return abnormal ? "value-bad" : "value-good";
+  bool isTransportConnected() const {
+    if (monitorTransport == nullptr) return false;
+    const MonitorTransportState state = monitorTransport->state();
+    return state == TRANSPORT_STATE_READY ||
+           state == TRANSPORT_STATE_RECEIVING;
+  }
+
+  MeasurementFreshnessState latestFreshness(uint32_t nowMs) const {
+    MeasurementFreshnessInput input;
+    input.hasRecord = recordManager->getRecordCount() > 0;
+    if (input.hasRecord) {
+      input.valid = recordManager->getLatestRecord().valid;
+    }
+    input.receivedThisBoot = recordManager->latestReceivedThisBoot();
+    input.transportConnected = isTransportConnected();
+    input.nowMs = nowMs;
+    uint32_t receiveAge = 0;
+    if (recordManager->lastSuccessfulReceiveAgeMs(nowMs, receiveAge)) {
+      input.lastSuccessfulReceiveMs = nowMs - receiveAge;
+    }
+    return measurementFreshness(input);
+  }
+
+  const char* sanitizedDiagnosticState() const {
+    static constexpr const char* kStates[] = {
+      "valid", "storage_error", "invalid_timestamp", "device_error",
+      "out_of_range", "unsupported_format", "unsupported_model",
+      "overflow", "discontinuity", "malformed"
+    };
+    for (const char* state : kStates) {
+      char marker[48];
+      const int length = snprintf(marker, sizeof(marker), "data-status='%s'",
+                                  state);
+      if (length > 0 && static_cast<size_t>(length) < sizeof(marker) &&
+          lastData->indexOf(marker) >= 0) {
+        return state;
+      }
+    }
+    return lastData->isEmpty() ? "waiting" : "unavailable";
   }
 
   // 針對使用者可控字串做最小 HTML escape，防止 SSID/型號名含 '<' 把後續解讀成 tag
@@ -81,23 +133,20 @@ private:
   // 表格中單一欄位：對 invalid record 顯示 "—" 並用中性樣式，避免 -1 紅字。
   // 直接 append 進 out，免每次呼叫都建一個 ~48 byte 的回傳 String 暫物件
   // （20 筆 × 3 欄 × 兩個表格 ≈ 120 個 alloc/render）。
-  void renderTableValueCell(String& out, int value, bool valid,
-                            bool (WebHandler::*abnormalFn)(int) const) const {
+  void renderTableValueCell(String& out, int value, bool valid) const {
     bool ok = valid && value > 0;
     if (!ok) { out += "<td class='value-na'>—</td>"; return; }
-    bool bad = (this->*abnormalFn)(value);
-    out += "<td class='";
-    out += valueClass(bad);
-    out += "'>";
+    out += "<td>";
     out += value; // int append 用 String 內建 overload，免 String(value) 暫物件
     out += "</td>";
   }
 
-  // KPI 卡片：valueOk=false 顯示 "—" + 中性 pill，避免 -1 之類無效數值被誤判為異常。
+  // KPI 卡片：valueOk=false 顯示 "—" + 中性提示，避免無效值看似可用。
   // 直接 append 進 out，省每次呼叫一個 ~320B 的中介 String（dashboard 一次 render 3 次）
   void renderKpiCard(String& out, const char* idVal, const char* idPill,
                      const char* label, const char* unit,
-                     int value, bool valueOk, bool bad) const {
+                     int value, bool valueOk,
+                     MeasurementReviewState state) const {
     out += "<article class='kpi-card'>";
     out += "<div class='kpi-label'><span>";
     out += label;
@@ -110,7 +159,7 @@ private:
       out += "' class='kpi-value value-na'>—</div>";
     } else {
       out += "' class='kpi-value ";
-      out += valueClass(bad);
+      out += reviewClass(state);
       out += "'>";
       out += value; // 直接 += int，免 String(value) 暫物件
       out += "</div>";
@@ -121,9 +170,10 @@ private:
       out += "' class='state-pill state-na'>未解析</span>";
     } else {
       out += "' class='state-pill ";
-      out += bad ? "state-alert" : "state-ok";
+      out += state == MeasurementReviewState::WITHIN_REFERENCE
+        ? "state-ok" : "state-alert";
       out += "'>";
-      out += bad ? "異常" : "正常";
+      out += measurementReviewLabel(state);
       out += "</span>";
     }
     out += "</article>";
@@ -133,7 +183,9 @@ private:
   void navLink(String& out, const String& href, const String& label, const String& activePath) const {
     out += "<a class='top-nav-link";
     if (href == activePath) out += " active";
-    out += "' href='";
+    out += "'";
+    if (href == activePath) out += " aria-current='page'";
+    out += " href='";
     out += href;
     out += "'>";
     out += label;
@@ -170,6 +222,7 @@ private:
     css += ".top-nav{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px;}";
     css += ".top-nav-link{padding:10px 14px;border-radius:12px;text-decoration:none;color:#1f3558;background:rgba(255,255,255,.68);border:1px solid var(--border);font-weight:700;font-size:14px;}";
     css += ".top-nav-link.active{background:var(--primary);color:var(--primary-ink);border-color:var(--primary);box-shadow:0 8px 18px rgba(15,98,254,.28);} ";
+    css += "a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible{outline:3px solid #111827;outline-offset:3px;}";
 
     css += ".panel{background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:18px 20px;margin-bottom:16px;box-shadow:var(--shadow);} ";
     css += ".panel h2{margin:0 0 10px;font-size:22px;}";
@@ -196,11 +249,15 @@ private:
     css += ".state-ok{background:rgba(17,138,76,.12);color:var(--success);}";
     css += ".state-alert{background:rgba(217,48,37,.12);color:var(--danger);}";
     css += ".state-na{background:rgba(96,112,138,.14);color:var(--muted);}";
+    css += ".freshness-banner{padding:12px 14px;border:2px solid #35578c;border-radius:12px;background:#eef5ff;font-weight:800;margin-bottom:14px;}";
+    css += ".freshness-banner[data-state='stale'],.freshness-banner[data-state='disconnected'],.freshness-banner[data-state='invalid']{border-color:var(--danger);background:#fff4f3;}";
 
     css += ".recent-table table,.history-table table{width:100%;border-collapse:collapse;font-size:14px;overflow:hidden;border-radius:12px;}";
     css += ".recent-table th,.recent-table td,.history-table th,.history-table td{padding:11px 10px;border-bottom:1px solid #e5edf7;text-align:center;}";
     css += ".recent-table th,.history-table th{background:#eff5ff;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#4d6282;}";
     css += ".recent-table tr:nth-child(even),.history-table tr:nth-child(even){background:#fbfdff;}";
+    css += ".table-scroll{max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;}";
+    css += "caption{text-align:left;font-weight:800;padding:0 0 10px;color:#223a5f;}";
 
     css += ".status-list{list-style:none;margin:0;padding:0;display:grid;gap:8px;}";
     css += ".status-list li{display:flex;justify-content:space-between;gap:12px;padding:8px 10px;border-radius:10px;background:#f7faff;border:1px solid #e7eef9;}";
@@ -230,7 +287,7 @@ private:
     // CSS ~5.2KB + head/nav 樣板 ~700B + 留一點給小頁面 body 共 ~2KB ≈ 8KB
     // 大頁面（handleMonitor/handleHistory）會在自己的 handler 再 reserve 更多
     html.reserve(8192);
-    html = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
+    html = "<!DOCTYPE html><html lang='zh-Hant'><head><meta charset='UTF-8'>";
     html += "<title>" + title + "</title>";
     html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
     if (autoRefresh) {
@@ -244,19 +301,23 @@ private:
     html += "<h1 class='page-title'>" + title + "</h1>";
     html += "<span class='chip'>Health Monitor</span>";
     html += "</header>";
-    html += "<nav class='top-nav'>";
+    html += "<nav class='top-nav' aria-label='主要導覽'>";
     navLink(html, "/", "監控", activePath);
     navLink(html, "/history", "歷史記錄", activePath);
-    navLink(html, "/config", "WiFi 設定", activePath);
-    navLink(html, "/bp_model", "型號設定", activePath);
+    if (server->currentRole() == bp_web::AccessRole::ADMIN) {
+      navLink(html, "/config", "WiFi 設定", activePath);
+      navLink(html, "/bp_model", "型號設定", activePath);
+      navLink(html, "/security", "管理者安全設定", activePath);
+    }
     html += "</nav>";
+    html += "<main id='main-content'>";
     return html;
   }
 
   // 回 const char*：caller 用 `html += buildPageEnd()` 是 String += const char*，
   // 不會建臨時 String（每頁 render 省一個 ~30 byte alloc）
   const char* buildPageEnd() const {
-    return "</div></body></html>";
+    return "</main></div></body></html>";
   }
 
 public:
@@ -265,6 +326,7 @@ public:
              Preferences* preferences, BP_RecordManager* recordManager,
              BP_Parser* bpParser,
              String* bp_model, String* lastData, String* transportName, String* transportStatus,
+             MonitorTransport* monitorTransport,
              const char* hostname, const char* ap_ssid)
     : server(server),
       deviceSecurity(deviceSecurity),
@@ -275,6 +337,7 @@ public:
       lastData(lastData),
       transportName(transportName),
       transportStatus(transportStatus),
+      monitorTransport(monitorTransport),
       hostname(hostname),
       ap_ssid(ap_ssid) {}
 
@@ -564,8 +627,9 @@ private:
       "function toggleManualSSID(){"
         "var select=document.getElementById('wifi-select');"
         "var manualInput=document.getElementById('manual-ssid');"
-        "if(select.value==='manual'){manualInput.style.display='block';manualInput.required=true;}"
-        "else{manualInput.style.display='none';manualInput.required=false;}"
+        "var manualLabel=document.getElementById('manual-ssid-label');"
+        "if(select.value==='manual'){manualInput.style.display='block';manualLabel.style.display='block';manualInput.required=true;}"
+        "else{manualInput.style.display='none';manualLabel.style.display='none';manualInput.required=false;}"
       "}"
       "</script>";
 
@@ -594,6 +658,7 @@ private:
     }
     html += "<p class='helper-text'>若掃描列表中沒有目標網路，請改用手動輸入。</p>";
 
+    html += "<label id='manual-ssid-label' class='field-label' for='manual-ssid' style='display:none'>手動輸入 WiFi 名稱</label>";
     html += "<input type='text' id='manual-ssid' name='manual_ssid' placeholder='輸入 WiFi 名稱' style='display:none'>";
 
     html += "<label class='field-label' for='wifi-password'>WiFi 密碼</label>";
@@ -775,59 +840,85 @@ private:
   }
 
   void handleMonitor() {
-    // 不再用 meta refresh：JS 每 3 秒 fetch /api/latest 只更新數值節點，
-    // 替代每次重建 ~10KB 整頁 HTML。
     String html = buildPageStart("血壓監控儀表板", "/", false);
-    // reserve 必須在 assignment 之後（buildPageStart 回傳的 String 透過 move-assignment
-    // 會把 html 容量重設成它自己的 ~6KB）。完整 dashboard ~11.5KB worst case。
-    html.reserve(11264);
+    html.reserve(14336);
 
-    int recordCount = recordManager->getRecordCount();
+    const uint32_t nowMs = static_cast<uint32_t>(millis());
+    const int recordCount = recordManager->getRecordCount();
+    const MeasurementFreshnessState freshness = latestFreshness(nowMs);
+    html += "<div id='measurement-freshness' class='freshness-banner' data-state='";
+    html += measurementFreshnessCode(freshness);
+    html += "' role='status' aria-live='polite'>資料新鮮度：";
+    html += measurementFreshnessLabel(freshness);
+    html += "</div>";
+
     if (recordCount > 0) {
       const BPData& latest = recordManager->getLatestRecord();
-
-      // 無效記錄（valid=false 或數值非正）一律顯示中性 "—"，避免 "-1 異常" 紅字誤導
-      bool sysOk = latest.valid && latest.systolic > 0;
-      bool diaOk = latest.valid && latest.diastolic > 0;
-      bool pulOk = latest.valid && latest.pulse > 0;
-      bool sysBad = sysOk && isSystolicAbnormal(latest.systolic);
-      bool diaBad = diaOk && isDiastolicAbnormal(latest.diastolic);
-      bool pulBad = pulOk && isPulseAbnormal(latest.pulse);
+      const bool sysOk = latest.valid && latest.systolic > 0;
+      const bool diaOk = latest.valid && latest.diastolic > 0;
+      const bool pulOk = latest.valid && latest.pulse > 0;
+      const MeasurementReviewState review = classifyMeasurement(latest);
 
       html += "<section class='panel latest-vitals'>";
       html += "<div class='section-head'><h2>最新量測</h2>";
       html += "<span id='last-updated' class='last-updated'>最後更新：";
       html += latest.timestamp;
       html += "（每 3 秒刷新）</span></div>";
+      html += "<p class='helper-text'><strong>複核提示：</strong>";
+      html += measurementReviewLabel(review);
+      html += "。";
+      html += measurementReferencePolicyName();
+      html += "。</p>";
       html += "<div class='kpi-grid'>";
 
-      renderKpiCard(html, "kpi-sys", "pill-sys", "收縮壓", "mmHg", latest.systolic, sysOk, sysBad);
-      renderKpiCard(html, "kpi-dia", "pill-dia", "舒張壓", "mmHg", latest.diastolic, diaOk, diaBad);
-      renderKpiCard(html, "kpi-pul", "pill-pul", "脈搏",   "bpm",  latest.pulse,    pulOk, pulBad);
+      renderKpiCard(html, "kpi-sys", "pill-sys", "收縮壓", "mmHg",
+                    latest.systolic, sysOk, review);
+      renderKpiCard(html, "kpi-dia", "pill-dia", "舒張壓", "mmHg",
+                    latest.diastolic, diaOk, review);
+      renderKpiCard(html, "kpi-pul", "pill-pul", "脈搏", "bpm",
+                    latest.pulse, pulOk, review);
 
-      html += "</div></section>";
+      html += "</div><p class='helper-text'>";
+      html += repeatedMeasurementGuidance();
+      html += "</p><p class='helper-text'><strong>交接序號：</strong>記錄 ";
+      appendUInt64(html, latest.recordSequence);
+      html += "；量測工作階段 ";
+      appendUInt64(html, latest.sessionSequence);
+      html += "。僅將此不識別序號交給受信任的診所流程。</p></section>";
 
       html += "<section class='panel recent-table'>";
       html += "<div class='section-head'>";
       html += "<h2>最近 5 筆數據</h2>";
       html += "<a class='btn btn-ghost' href='/history'>查看完整歷史</a>";
       html += "</div>";
-      html += "<table>";
-      html += "<tr><th>測量時間</th><th>收縮壓 (mmHg)</th><th>舒張壓 (mmHg)</th><th>脈搏 (bpm)</th></tr>";
+      html += "<div class='table-scroll'><table>";
+      html += "<caption>最近五筆不識別量測記錄</caption><thead><tr>";
+      html += "<th scope='col'>記錄序號</th><th scope='col'>測量時間</th>";
+      html += "<th scope='col'>收縮壓 (mmHg)</th><th scope='col'>舒張壓 (mmHg)</th>";
+      html += "<th scope='col'>脈搏 (bpm)</th><th scope='col'>品質</th>";
+      html += "<th scope='col'>複核提示</th></tr></thead><tbody>";
 
-      int displayCount = min(5, recordCount);
+      const int displayCount = min(5, recordCount);
       for (int i = 0; i < displayCount; i++) {
         const BPData& record = recordManager->getRecord(i);
         html += "<tr><td>";
+        appendUInt64(html, record.recordSequence);
+        html += "</td><td>";
         html += record.timestamp;
         html += "</td>";
-        renderTableValueCell(html, record.systolic, record.valid, &WebHandler::isSystolicAbnormal);
-        renderTableValueCell(html, record.diastolic, record.valid, &WebHandler::isDiastolicAbnormal);
-        renderTableValueCell(html, record.pulse, record.valid, &WebHandler::isPulseAbnormal);
+        renderTableValueCell(html, record.systolic, record.valid);
+        renderTableValueCell(html, record.diastolic, record.valid);
+        renderTableValueCell(html, record.pulse, record.valid);
+        html += "<td>";
+        html += measurementQualityCode(record.quality);
+        html += record.movementCount > 0 ? "（偵測到移動）" : "（未偵測到移動）";
+        html += "</td><td>";
+        html += measurementReviewLabel(classifyMeasurement(record));
+        html += "</td>";
         html += "</tr>";
       }
 
-      html += "</table></section>";
+      html += "</tbody></table></div></section>";
     } else {
       html += "<section class='panel latest-vitals'>";
       html += "<h2>最新量測</h2>";
@@ -836,7 +927,7 @@ private:
       html += "</section>";
     }
 
-    html += "<details class='panel diagnostic-data'>";
+    html += "<details class='panel diagnostic-data' role='status' aria-live='polite'>";
     html += "<summary>接收診斷</summary>";
     if (*lastData == "") {
       html += "<p class='helper-text'>等待數據...</p>";
@@ -862,6 +953,19 @@ private:
     html += "<li><span>通道狀態</span><strong id='conn-status'>";
     html += *transportStatus;
     html += "</strong></li>";
+    html += "<li><span>接收診斷狀態</span><strong id='diagnostic-state'>";
+    html += sanitizedDiagnosticState();
+    html += "</strong></li>";
+    html += "<li><span>韌體版本</span><strong>" BP_FIRMWARE_VERSION
+            "（" BP_BUILD_SHA "）</strong></li>";
+    html += "<li><span>支援協定</span><strong>";
+    html += supportedMeasurementProtocol();
+    html += "</strong></li>";
+    html += "<li><span>資料遺失事件</span><strong>";
+    html += monitorTransport == nullptr ? 0U : monitorTransport->dataLossCount();
+    html += "</strong></li><li><span>重新連線次數</span><strong>";
+    html += monitorTransport == nullptr ? 0U : monitorTransport->reconnectCount();
+    html += "</strong></li>";
     html += "<li><span>WiFi IP</span><strong id='conn-ip'>";
     html += wifiIp;
     html += "</strong></li>";
@@ -875,51 +979,65 @@ private:
     html += "</ul>";
     html += "</section>";
 
-    html += "<section class='panel danger-zone'>";
-    html += "<h3>維護操作</h3>";
-    html += "<p class='helper-text'>若要重新配網，可重置 WiFi 設定並重啟。</p>";
-    html += "<form method='post' action='/reset' onsubmit=\"return confirm('確定要重置 WiFi 設定並重啟嗎？');\" style='display:inline'>";
-    html += "<button type='submit' class='btn btn-danger'>重置 WiFi 設定</button>";
-    html += "</form>";
-    html += "</section>";
+    if (server->currentRole() == bp_web::AccessRole::ADMIN) {
+      html += "<section class='panel danger-zone'>";
+      html += "<h3>僅限管理者：維護操作</h3>";
+      html += "<p class='helper-text'>若要重新配網，可重置 WiFi 設定並重啟。</p>";
+      html += "<form method='post' action='/reset' onsubmit=\"return confirm('確定要重置 WiFi 設定並重啟嗎？');\" style='display:inline'>";
+      html += "<button type='submit' class='btn btn-danger'>重置 WiFi 設定</button>";
+      html += "</form></section>";
+    }
 
-    // AJAX poll：每 3 秒從 /api/latest 取最新狀態並就地更新 DOM。
-    // 比起原 meta refresh，伺服器端輸出量從 ~10KB 降到 ~300B，heap churn 大減。
+    html += "<script>let bpRevision='";
+    appendUInt64(html, recordManager->getRevision());
     html += F(
-      "<script>"
+      "';let bpLastPollSuccess='尚無成功輪詢';"
       "async function bpRefresh(){"
         "try{"
-        // 切走 tab 時 browser 會 throttle 但仍 fire；明確 skip 省 device 處理
         "if(document.hidden)return;"
-        "const r=await fetch('/api/latest');if(!r.ok)return;"
+        "const r=await fetch('/api/latest',{cache:'no-store'});"
+        "if(!r.ok)throw new Error('poll-failure');"
         "const d=await r.json();"
+        "bpLastPollSuccess=new Date().toLocaleTimeString('zh-TW',{hour12:false});"
+        "if(String(d.revision)!==bpRevision){location.reload();return;}"
         "const t=document.getElementById('conn-transport');if(t)t.textContent=d.transport_name;"
         "const s=document.getElementById('conn-status');if(s)s.textContent=d.transport_status;"
         "const ip=document.getElementById('conn-ip');if(ip)ip.textContent=d.wifi_ip||'未連線';"
+        "const x=document.getElementById('diagnostic-state');if(x)x.textContent=d.diagnostic_state;"
+        "bpFreshness(d.freshness_state,d.freshness_label,d.last_successful_receive_age_ms);"
         "if(d.count>0){"
           "if(!document.getElementById('kpi-sys')){location.reload();return;}"
           "const v=d.valid===true;"
-          "bpKpi('kpi-sys','pill-sys',d.systolic,d.sysBad,v&&d.systolic>0);"
-          "bpKpi('kpi-dia','pill-dia',d.diastolic,d.diaBad,v&&d.diastolic>0);"
-          "bpKpi('kpi-pul','pill-pul',d.pulse,d.pulBad,v&&d.pulse>0);"
+          "bpKpi('kpi-sys','pill-sys',d.systolic,d.review_state,d.review_label,v&&d.systolic>0);"
+          "bpKpi('kpi-dia','pill-dia',d.diastolic,d.review_state,d.review_label,v&&d.diastolic>0);"
+          "bpKpi('kpi-pul','pill-pul',d.pulse,d.review_state,d.review_label,v&&d.pulse>0);"
           "const u=document.getElementById('last-updated');"
           "if(u)u.textContent='最後更新：'+d.timestamp+'（每 3 秒刷新）';"
         "}else if(document.getElementById('kpi-sys')){"
           "location.reload();return;"
-        "}}catch(e){}"
-        // 用 setTimeout chain 取代 setInterval：確保前一次 poll 完成（含網路慢/錯誤）
-        // 後才排下一次，避免設備重啟或卡頓時 request 堆疊
+        "}}catch(e){"
+          "const b=document.getElementById('measurement-freshness');"
+          "if(b){b.dataset.state='disconnected';b.dataset.reason='poll-failure';"
+          "b.textContent='資料更新中斷；畫面可能過期。最後成功更新：'+bpLastPollSuccess;}"
+        "}"
         "finally{setTimeout(bpRefresh,3000);}"
       "}"
-      "function bpKpi(iv,ip,v,bad,ok){"
+      "function bpFreshness(state,label,age){"
+        "const b=document.getElementById('measurement-freshness');if(!b)return;"
+        "b.dataset.state=state;let suffix='';"
+        "if(age!==null&&age!==undefined)suffix='；最後成功接收約 '+Math.floor(age/1000)+' 秒前';"
+        "b.textContent='資料新鮮度：'+label+suffix;"
+      "}"
+      "function bpKpi(iv,ip,v,state,label,ok){"
         "const a=document.getElementById(iv),b=document.getElementById(ip);"
         "if(!ok){"
           "if(a){a.textContent='—';a.className='kpi-value value-na';}"
           "if(b){b.textContent='未解析';b.className='state-pill state-na';}"
           "return;"
         "}"
-        "if(a){a.textContent=v;a.className='kpi-value '+(bad?'value-bad':'value-good');}"
-        "if(b){b.textContent=bad?'異常':'正常';b.className='state-pill '+(bad?'state-alert':'state-ok');}"
+        "const review=state!=='within_reference';"
+        "if(a){a.textContent=v;a.className='kpi-value '+(review?'value-bad':'value-good');}"
+        "if(b){b.textContent=label;b.className='state-pill '+(review?'state-alert':'state-ok');}"
       "}"
       "bpRefresh();"
       "</script>"
@@ -944,35 +1062,50 @@ private:
     html += "</div>";
     html += "</div>";
 
-    html += "<table>";
-    html += "<tr><th>測量時間</th><th>收縮壓 (mmHg)</th><th>舒張壓 (mmHg)</th><th>脈搏 (bpm)</th></tr>";
+    html += "<div class='table-scroll'><table>";
+    html += "<caption>已保存的不識別量測歷史</caption><thead><tr>";
+    html += "<th scope='col'>記錄序號</th><th scope='col'>工作階段序號</th>";
+    html += "<th scope='col'>測量時間</th><th scope='col'>收縮壓 (mmHg)</th>";
+    html += "<th scope='col'>舒張壓 (mmHg)</th><th scope='col'>脈搏 (bpm)</th>";
+    html += "<th scope='col'>品質</th><th scope='col'>複核提示</th></tr></thead><tbody>";
 
     int recordCount = recordManager->getRecordCount();
     if (recordCount > 0) {
       for (int i = 0; i < recordCount; i++) {
         const BPData& record = recordManager->getRecord(i);
         html += "<tr><td>";
+        appendUInt64(html, record.recordSequence);
+        html += "</td><td>";
+        appendUInt64(html, record.sessionSequence);
+        html += "</td><td>";
         html += record.timestamp;
         html += "</td>";
-        renderTableValueCell(html, record.systolic, record.valid, &WebHandler::isSystolicAbnormal);
-        renderTableValueCell(html, record.diastolic, record.valid, &WebHandler::isDiastolicAbnormal);
-        renderTableValueCell(html, record.pulse, record.valid, &WebHandler::isPulseAbnormal);
+        renderTableValueCell(html, record.systolic, record.valid);
+        renderTableValueCell(html, record.diastolic, record.valid);
+        renderTableValueCell(html, record.pulse, record.valid);
+        html += "<td>";
+        html += measurementQualityCode(record.quality);
+        html += record.movementCount > 0 ? "（偵測到移動）" : "（未偵測到移動）";
+        html += "</td><td>";
+        html += measurementReviewLabel(classifyMeasurement(record));
+        html += "</td>";
         html += "</tr>";
       }
     } else {
-      html += "<tr><td colspan='4'>尚無歷史記錄</td></tr>";
+      html += "<tr><td colspan='8'>尚無歷史記錄</td></tr>";
     }
 
-    html += "</table>";
+    html += "</tbody></table></div>";
     html += "</section>";
 
-    html += "<section class='panel danger-zone'>";
-    html += "<h3>危險操作</h3>";
-    html += "<p class='helper-text'>此操作會清除全部歷史資料且無法復原。</p>";
-    html += "<form method='post' action='/clear_history' onsubmit=\"return confirm('確定要清除所有歷史記錄嗎？');\" style='display:inline'>";
-    html += "<button type='submit' class='btn btn-danger'>清除記錄</button>";
-    html += "</form>";
-    html += "</section>";
+    if (server->currentRole() == bp_web::AccessRole::ADMIN) {
+      html += "<section class='panel danger-zone'>";
+      html += "<h3>僅限管理者：危險操作</h3>";
+      html += "<p class='helper-text'>此操作會清除全部歷史資料且無法復原。</p>";
+      html += "<form method='post' action='/clear_history' onsubmit=\"return confirm('確定要清除所有歷史記錄嗎？');\" style='display:inline'>";
+      html += "<button type='submit' class='btn btn-danger'>清除記錄</button>";
+      html += "</form></section>";
+    }
 
     html += buildPageEnd();
     server->send(200, "text/html; charset=UTF-8", html);
@@ -982,6 +1115,9 @@ private:
     // 傳 String 進去會 copy；使用 c_str() 直接引用。在 single-thread handler
     // 內 BPData 不會被修改，pointer 安全。
     JsonDocument doc;
+    setUInt64Json(doc["revision"], recordManager->getRevision());
+    doc["firmware_version"] = BP_FIRMWARE_VERSION;
+    doc["protocol"] = supportedMeasurementProtocol();
     JsonArray records = doc["records"].to<JsonArray>();
 
     int recordCount = recordManager->getRecordCount();
@@ -989,11 +1125,18 @@ private:
       const BPData& record = recordManager->getRecord(i);
 
       JsonObject recordObj = records.add<JsonObject>();
+      setUInt64Json(recordObj["record_sequence"], record.recordSequence);
+      setUInt64Json(recordObj["session_sequence"], record.sessionSequence);
       recordObj["timestamp"] = record.timestamp.c_str();
+      recordObj["timestamp_source"] = timestampSourceCode(record.timestampSource);
       recordObj["systolic"] = record.systolic;
       recordObj["diastolic"] = record.diastolic;
       recordObj["pulse"] = record.pulse;
+      recordObj["quality"] = measurementQualityCode(record.quality);
+      recordObj["movement_count"] = record.movementCount;
       recordObj["valid"] = record.valid;
+      recordObj["review_state"] =
+        measurementReviewCode(classifyMeasurement(record));
     }
 
     String jsonStr;
@@ -1001,21 +1144,45 @@ private:
     server->send(200, "application/json", jsonStr);
   }
 
-  // 給 dashboard JS 輪詢用的小型狀態端點，~300 bytes
   void handleLatestAPI() {
     JsonDocument doc;
-    int count = recordManager->getRecordCount();
+    const uint32_t nowMs = static_cast<uint32_t>(millis());
+    const int count = recordManager->getRecordCount();
+    const MeasurementFreshnessState freshness = latestFreshness(nowMs);
     doc["count"] = count;
+    setUInt64Json(doc["revision"], recordManager->getRevision());
+    doc["freshness_state"] = measurementFreshnessCode(freshness);
+    doc["freshness_label"] = measurementFreshnessLabel(freshness);
+    doc["firmware_version"] = BP_FIRMWARE_VERSION;
+    doc["build_identifier"] = BP_BUILD_SHA;
+    doc["protocol"] = supportedMeasurementProtocol();
+    doc["reference_policy"] = measurementReferencePolicyName();
+    doc["data_loss_count"] = monitorTransport == nullptr
+      ? 0U : monitorTransport->dataLossCount();
+    doc["reconnect_count"] = monitorTransport == nullptr
+      ? 0U : monitorTransport->reconnectCount();
+    doc["diagnostic_state"] = sanitizedDiagnosticState();
+    uint32_t receiveAgeMs = 0;
+    if (recordManager->lastSuccessfulReceiveAgeMs(nowMs, receiveAgeMs)) {
+      doc["last_successful_receive_age_ms"] = receiveAgeMs;
+    } else {
+      doc["last_successful_receive_age_ms"] = nullptr;
+    }
     if (count > 0) {
       const BPData& latest = recordManager->getLatestRecord();
+      const MeasurementReviewState review = classifyMeasurement(latest);
+      setUInt64Json(doc["record_sequence"], latest.recordSequence);
+      setUInt64Json(doc["session_sequence"], latest.sessionSequence);
       doc["timestamp"] = latest.timestamp.c_str();
+      doc["timestamp_source"] = timestampSourceCode(latest.timestampSource);
       doc["systolic"] = latest.systolic;
       doc["diastolic"] = latest.diastolic;
       doc["pulse"] = latest.pulse;
+      doc["quality"] = measurementQualityCode(latest.quality);
+      doc["movement_count"] = latest.movementCount;
       doc["valid"] = latest.valid;
-      doc["sysBad"] = isSystolicAbnormal(latest.systolic);
-      doc["diaBad"] = isDiastolicAbnormal(latest.diastolic);
-      doc["pulBad"] = isPulseAbnormal(latest.pulse);
+      doc["review_state"] = measurementReviewCode(review);
+      doc["review_label"] = measurementReviewLabel(review);
     }
     // 整個 request handler 與 syncTransportStatus 都在 main loop 序列執行，
     // 不會發生 mid-request mutation，可直接 c_str() 引用省 pool 複製

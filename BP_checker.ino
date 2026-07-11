@@ -205,22 +205,25 @@ void setup() {
     }
   }
 
-  // 初始化各個模組
-  webHandler = new WebHandler(&server, &deviceSecurity,
-                             &preferences, &recordManager,
-                             &bpParser,
-                             &bp_model, &lastData, &transportName, &transportStatus,
-                             hostname, ap_ssid);
-  
-  wifiManager = new WiFiManager(
-    &server, &preferences, ap_ssid,
-    deviceSecurity.secret(DeviceSecretKind::AP), hostname);
-
+  // 初始化各個模組。先建立 transport，讓 Web operations state 直接讀取
+  // main-loop 擁有的累計計數，不另複製或重設診斷狀態。
   if (kTransportMode == TRANSPORT_MODE_OTG_PRIMARY) {
     monitorTransport = new UsbCdcTransport();
   } else {
-    monitorTransport = new UartTransport(&Serial1, kUartRxPin, kUartTxPin, kMonitorBaudRate);
+    monitorTransport = new UartTransport(&Serial1, kUartRxPin, kUartTxPin,
+                                         kMonitorBaudRate);
   }
+
+  webHandler = new WebHandler(&server, &deviceSecurity,
+                              &preferences, &recordManager,
+                              &bpParser,
+                              &bp_model, &lastData, &transportName,
+                              &transportStatus, monitorTransport,
+                              hostname, ap_ssid);
+
+  wifiManager = new WiFiManager(
+    &server, &preferences, ap_ssid,
+    deviceSecurity.secret(DeviceSecretKind::AP), hostname);
   
   dataProcessor = new DataProcessor(&bpParser, &recordManager,
                                    &lastData,
