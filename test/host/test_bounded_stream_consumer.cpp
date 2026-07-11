@@ -39,6 +39,9 @@ struct Fixture {
   bool throwWrite = false;
   bool throwFinish = false;
   bool throwAbort = false;
+  bool insideCallback = false;
+  bool abortDuringCallback = false;
+  bool continuedAfterCancel = false;
   int begins = 0;
   int writes = 0;
   int finishes = 0;
@@ -53,7 +56,10 @@ static bool begin(void* context, uint32_t expected) {
   fixture->begins++;
   fixture->expected = expected;
   if (fixture->reenter == Fixture::Reenter::BEGIN && fixture->consumer) {
+    fixture->insideCallback = true;
     fixture->consumer->cancel();
+    fixture->continuedAfterCancel = true;
+    fixture->insideCallback = false;
   }
   if (fixture->throwBegin) throw 1;
   return fixture->beginOk;
@@ -63,7 +69,10 @@ static bool write(void* context, const uint8_t* bytes, size_t length) {
   Fixture* fixture = static_cast<Fixture*>(context);
   fixture->writes++;
   if (fixture->reenter == Fixture::Reenter::WRITE && fixture->consumer) {
+    fixture->insideCallback = true;
     fixture->consumer->cancel();
+    fixture->continuedAfterCancel = true;
+    fixture->insideCallback = false;
   }
   if (fixture->throwWrite) throw 2;
   if (!fixture->writeOk || fixture->received + length > sizeof(fixture->bytes)) {
@@ -78,7 +87,10 @@ static bool finish(void* context) {
   Fixture* fixture = static_cast<Fixture*>(context);
   fixture->finishes++;
   if (fixture->reenter == Fixture::Reenter::FINISH && fixture->consumer) {
+    fixture->insideCallback = true;
     fixture->consumer->cancel();
+    fixture->continuedAfterCancel = true;
+    fixture->insideCallback = false;
   }
   if (fixture->throwFinish) throw 3;
   return fixture->finishOk;
@@ -87,6 +99,7 @@ static bool finish(void* context) {
 static void abortStream(void* context) {
   Fixture* fixture = static_cast<Fixture*>(context);
   fixture->aborts++;
+  if (fixture->insideCallback) fixture->abortDuringCallback = true;
   if (fixture->throwAbort) throw 4;
 }
 
@@ -308,6 +321,10 @@ static void testCallbackReentryCannotResurrectAbortedStream() {
              "callback re-entry leaves lifecycle failed closed");
     CHECK_EQ(fixture.aborts, 1,
              "callback re-entry aborts external owner exactly once");
+    CHECK_TRUE(fixture.continuedAfterCancel,
+               "outer callback returns normally after requesting cancel");
+    CHECK_TRUE(!fixture.abortDuringCallback,
+               "external abort waits until the outer callback has returned");
     consumer.cancel();
     CHECK_EQ(fixture.aborts, 1,
              "later cleanup cannot repeat re-entry abort");

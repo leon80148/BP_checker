@@ -141,7 +141,12 @@ public:
   }
 
   void cancel() {
-    if (_callbackInProgress) _reentryDetected = true;
+    if (_callbackInProgress) {
+      // The external callback still owns and may be using its context. Defer
+      // abort until the outer operation has completely returned.
+      _reentryDetected = true;
+      return;
+    }
     if (_state == StreamConsumerState::ACTIVE) {
       failAndAbort();
     } else {
@@ -152,7 +157,6 @@ public:
   void reset() {
     if (_callbackInProgress) {
       _reentryDetected = true;
-      cancel();
       return;
     }
     cancel();
