@@ -46,6 +46,21 @@ WiFiManager* wifiManager;
 DataProcessor* dataProcessor;
 MonitorTransport* monitorTransport;
 
+void loadHistoryFromStorage() {
+  const bool historyLoaded = recordManager.loadFromStorage();
+  if (!historyLoaded) {
+    lastData =
+      "<div class='diagnostic-data' data-status='storage_error'>"
+      "<h3>儲存診斷</h3><p><strong>狀態：</strong>storage_error</p>"
+      "<p class='helper-text'>歷史記錄載入未完成；請勿將目前列表視為完整記錄。"
+      "請聯絡管理人員檢查儲存空間，修復後重新啟動裝置。</p></div>";
+    Serial.println("history_load_failed");
+    return;
+  }
+  Serial.print("history_load_succeeded count=");
+  Serial.println(recordManager.getRecordCount());
+}
+
 void setup() {
   // 初始化串列埠監視器
   Serial.begin(115200);
@@ -85,10 +100,7 @@ void setup() {
   bpParser.setModel(bp_model);
   
   // 從儲存中加載歷史記錄
-  recordManager.loadFromStorage();
-  Serial.print("已加載 ");
-  Serial.print(recordManager.getRecordCount());
-  Serial.println(" 筆血壓記錄");
+  loadHistoryFromStorage();
   
   // 設置網頁路由
   webHandler->setupRoutes();

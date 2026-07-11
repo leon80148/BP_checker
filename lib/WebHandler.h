@@ -891,7 +891,17 @@ private:
   void handleClearHistory() {
     if (csrfBlocked()) return;
     if (pinBlocked()) return;
-    recordManager->clearRecords();
+    if (!recordManager->clearRecords()) {
+      Serial.println("history_clear_failed");
+      String errorHtml = buildPageStart("清除未完成", "/history");
+      errorHtml += "<section class='panel danger-zone'>";
+      errorHtml += "<h2>無法確認歷史記錄已清除</h2>";
+      errorHtml += "<p class='helper-text'>儲存系統未能確認清除完成；請保留目前診斷，重新載入歷史記錄後再試一次。</p>";
+      errorHtml += "</section>";
+      errorHtml += buildPageEnd();
+      server->send(503, "text/html; charset=UTF-8", errorHtml);
+      return;
+    }
     *lastData = ""; // 同步清掉舊診斷，避免 dashboard 顯示陳舊狀態
 
     String html = buildPageStart("記錄已清除", "/history", false, "<meta http-equiv='refresh' content='2;url=/history'>");

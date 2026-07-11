@@ -29,6 +29,10 @@ enum class BPParseError : uint8_t {
 };
 
 struct BPData {
+  // Opaque, non-identifying ordering/grouping tokens. Persistence owns
+  // recordSequence; a zero sessionSequence becomes a one-record session.
+  uint64_t recordSequence = 0;
+  uint64_t sessionSequence = 0;
   String timestamp;
   BPTimestampSource timestampSource = BPTimestampSource::UNSYNCED;
   int systolic = -1;

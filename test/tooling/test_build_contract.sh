@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 CHECKER="$ROOT/scripts/check_compile_warnings.sh"
 GATE="$ROOT/scripts/run_quality_gate.sh"
+SKETCH="$ROOT/BP_checker.ino"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
@@ -35,5 +36,29 @@ fi
 
 printf '%s\n' 'clean compile output' > "$TMP/clean.log"
 "$CHECKER" "$TMP/clean.log" "$allowed/"
+
+for token in \
+  'const bool historyLoaded = recordManager.loadFromStorage();' \
+  'if (!historyLoaded)' \
+  'history_load_failed' \
+  "data-status='storage_error'" \
+  '請聯絡管理人員檢查儲存空間' \
+  'history_load_succeeded count=' \
+  'loadHistoryFromStorage();'
+do
+  grep -Fq -- "$token" "$SKETCH" || {
+    echo "missing startup storage contract: $token" >&2
+    exit 1
+  }
+done
+
+load_line=$(grep -nF 'const bool historyLoaded = recordManager.loadFromStorage();' "$SKETCH" | head -1 | cut -d: -f1)
+failure_line=$(grep -nF 'history_load_failed' "$SKETCH" | head -1 | cut -d: -f1)
+return_line=$(awk -v start="$failure_line" 'NR > start && /return;/ { print NR; exit }' "$SKETCH")
+success_line=$(grep -nF 'history_load_succeeded count=' "$SKETCH" | head -1 | cut -d: -f1)
+if [[ -z "$return_line" || ! (load_line -lt failure_line && failure_line -lt return_line && return_line -lt success_line) ]]; then
+  echo "startup storage failure must return before the normal loaded claim" >&2
+  exit 1
+fi
 
 echo "Build contract checks passed."

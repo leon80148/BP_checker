@@ -88,6 +88,7 @@ struct World {
     __getLocalTimeCallCount() = 0;
     __serialOutput().clear();
     __fakeTimeValid() = false;
+    records.loadFromStorage();
     proc.setup();
     __serialOutput().clear();
   }
@@ -301,6 +302,11 @@ static void testIdentityNeverReachesDiagnosticsOrRecord() {
                           "encoded identity absent from valid Serial output");
   CHECK_TRUE(!Preferences::__containsSubstring(kLeakMarker),
              "subject ID absent from every fake NVS value");
+  CHECK_TRUE(Preferences::__hasKey("bp_records", "v3_state") &&
+             Preferences::__hasKey("bp_records", "v3_0"),
+             "privacy probe is stored only through v3 binary state/slot keys");
+  CHECK_TRUE(!Preferences::__containsSubstring(payload.c_str()),
+             "complete identity-bearing frame is absent from binary NVS");
 
   String csv;
   appendHistoryCsv(csv, world.records);
@@ -448,6 +454,34 @@ static void testTransportStatusSync() {
   CHECK_TRUE(contains(world.transportStatus, "boom"), "detail follows change");
 }
 
+static void testStorageFailureIsNeverRenderedOrLoggedAsAccepted() {
+  for (const auto mode : {Preferences::FailureMode::BEFORE_APPLY,
+                          Preferences::FailureMode::AFTER_APPLY}) {
+    World world;
+    Preferences::__failWrite(1, mode);
+    feedLine(world.transport, kFrame120);
+    world.proc.processIncomingData();
+
+    const int durableCount = mode == Preferences::FailureMode::BEFORE_APPLY
+      ? 0
+      : 1;
+    CHECK_EQ(world.records.getRecordCount(), durableCount,
+             "failed add reconciles to complete pre/post durable history");
+    CHECK_TRUE(contains(world.lastData, "storage_error"),
+               "operator sees storage-specific diagnostic");
+    CHECK_TRUE(contains(world.lastData, "重新量測"),
+               "storage diagnostic gives an actionable retry instruction");
+    CHECK_TRUE(contains(world.lastData, "歷史記錄"),
+               "ambiguous write tells operator to check history before retry");
+    CHECK_TRUE(!contains(world.lastData, "data-status='valid'"),
+               "failed or ambiguous add is never rendered accepted");
+    CHECK_TRUE(!contains(__serialOutput(), "measurement_accepted"),
+               "failed or ambiguous add is never logged accepted");
+    CHECK_TRUE(contains(__serialOutput(), "measurement_storage_failed"),
+               "storage failure uses sanitized production log code");
+  }
+}
+
 int main() {
   testCompleteAndSplitLines();
   testTwoFramesInOneBurst();
@@ -462,5 +496,6 @@ int main() {
   testModelSwitchClearsPartialFrame();
   testCleanReconnectBoundaryKeepsFirstNewFrame();
   testTransportStatusSync();
+  testStorageFailureIsNeverRenderedOrLoggedAsAccepted();
   return testReport();
 }

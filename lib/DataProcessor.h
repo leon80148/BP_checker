@@ -135,9 +135,15 @@ private:
     const int systolic = measurement.systolic;
     const int diastolic = measurement.diastolic;
     const int pulse = measurement.pulse;
+    if (!recordManager->addRecord(std::move(measurement))) {
+      renderDiagnostic(
+        "storage_error",
+        "儲存系統未能確認本次量測；請先查看歷史記錄確認是否已保存，再依診所流程重新量測。");
+      Serial.println("measurement_storage_failed");
+      return true;
+    }
     renderDiagnostic("valid", "量測已接收；如需複測請依診所流程進行。",
-                     &measurement);
-    recordManager->addRecord(std::move(measurement));
+                     &recordManager->getLatestRecord());
 
     Serial.print("measurement_accepted SYS=");
     Serial.print(systolic);

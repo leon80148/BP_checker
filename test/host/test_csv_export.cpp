@@ -16,6 +16,9 @@
 static BPData makeRecord(const char* ts, int sys, int dia, int pul, bool valid) {
   BPData d;
   d.timestamp = ts;
+  d.timestampSource = valid
+    ? BPTimestampSource::DEVICE
+    : BPTimestampSource::LEGACY_UNSYNCED;
   d.systolic = sys;
   d.diastolic = dia;
   d.pulse = pul;
@@ -67,12 +70,9 @@ static void testInvalidRecordsSkipped() {
 }
 
 static void testQuoteEscaping() {
-  Preferences::__reset();
-  BP_RecordManager m(5);
-  m.addRecord(makeRecord("t\"x", 120, 80, 65, true)); // 防禦性：欄位含引號
   String csv;
-  appendHistoryCsv(csv, m);
-  CHECK_TRUE(contains(csv, "\"t\"\"x\""), "embedded quote doubled");
+  __appendCsvField(csv, String("t\"x")); // 防禦性純函式測試
+  CHECK_STR(csv, "\"t\"\"x\"", "embedded quote doubled");
 }
 
 int main() {
