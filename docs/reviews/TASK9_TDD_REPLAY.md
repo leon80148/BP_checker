@@ -73,6 +73,11 @@ The deferred-abort re-review RED overlays
 At `8af1ef7`, normal and ASan/UBSan focused runs pass 88 checks and abort is
 deferred until no external callback remains on the stack.
 
+The explicit route-body RED can be replayed by overlaying
+`39e3a2c:test/host/test_web_access_policy.cpp` onto `c41c658`; compilation
+fails because `RouteBodyKind` and `routeBodyPolicyIsValid` do not exist. At
+`39e3a2c`, access policy passes 294 checks and request gate passes 2,201 checks.
+
 ## Bounded Binary HTTP Stream
 
 The production commit is `da220d1`. Its parent, `f43c855`, still rejects every
