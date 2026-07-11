@@ -67,6 +67,12 @@ focused run fails 4/82 checks because begin/write/finish report success after a
 nested `cancel()`, and finish resurrects the state as complete. At `72e7cab`,
 normal and ASan/UBSan focused runs pass all 82 checks.
 
+The deferred-abort re-review RED overlays
+`8af1ef7:test/host/test_bounded_stream_consumer.cpp` onto `f9eb5b2`. It fails
+3/88 checks because external abort runs before each reentrant callback returns.
+At `8af1ef7`, normal and ASan/UBSan focused runs pass 88 checks and abort is
+deferred until no external callback remains on the stack.
+
 ## Bounded Binary HTTP Stream
 
 The production commit is `da220d1`. Its parent, `f43c855`, still rejects every
