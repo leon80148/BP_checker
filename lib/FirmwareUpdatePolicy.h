@@ -13,6 +13,8 @@ static constexpr size_t kTargetCapacity = 33;
 static constexpr size_t kSourceShaCapacity = 41;
 static constexpr size_t kSha256Capacity = 65;
 static constexpr size_t kSequenceSlotBytes = 32;
+static constexpr size_t kPendingSignatureMaxBytes = 80;
+static constexpr size_t kPendingReceiptBytes = 480;
 
 enum class Result : uint8_t {
   OK = 0,
@@ -470,6 +472,94 @@ inline uint32_t readLe32(const uint8_t* input) {
     value |= static_cast<uint32_t>(input[i]) << (8U * i);
   }
   return value;
+}
+
+inline void writeLe16(uint8_t* output, uint16_t value) {
+  output[0] = static_cast<uint8_t>(value & 0xffU);
+  output[1] = static_cast<uint8_t>((value >> 8U) & 0xffU);
+}
+
+inline uint16_t readLe16(const uint8_t* input) {
+  return static_cast<uint16_t>(input[0]) |
+         static_cast<uint16_t>(static_cast<uint16_t>(input[1]) << 8U);
+}
+
+struct PendingUpdateReceipt {
+  uint16_t manifestLength = 0;
+  uint16_t signatureLength = 0;
+  uint8_t manifest[kManifestMaxBytes] = {};
+  uint8_t signature[kPendingSignatureMaxBytes] = {};
+};
+
+inline Result makePendingUpdateReceipt(
+    const uint8_t* manifest, size_t manifestLength,
+    const uint8_t* signature, size_t signatureLength,
+    PendingUpdateReceipt& output) {
+  memset(&output, 0, sizeof(output));
+  if (manifest == nullptr || manifestLength == 0 ||
+      manifestLength > sizeof(output.manifest) || signature == nullptr ||
+      signatureLength == 0 || signatureLength > sizeof(output.signature)) {
+    return Result::INVALID_ARGUMENT;
+  }
+  for (size_t i = 0; i < manifestLength; ++i) {
+    if (manifest[i] == 0) return Result::INVALID_ARGUMENT;
+  }
+  output.manifestLength = static_cast<uint16_t>(manifestLength);
+  output.signatureLength = static_cast<uint16_t>(signatureLength);
+  memcpy(output.manifest, manifest, manifestLength);
+  memcpy(output.signature, signature, signatureLength);
+  return Result::OK;
+}
+
+inline bool encodePendingUpdateReceipt(const PendingUpdateReceipt& receipt,
+                                       uint8_t* output, size_t length) {
+  if (output == nullptr || length != kPendingReceiptBytes ||
+      receipt.manifestLength == 0 ||
+      receipt.manifestLength > sizeof(receipt.manifest) ||
+      receipt.signatureLength == 0 ||
+      receipt.signatureLength > sizeof(receipt.signature)) {
+    return false;
+  }
+  memset(output, 0, length);
+  output[0] = 'B'; output[1] = 'P'; output[2] = 'U'; output[3] = 'R';
+  output[4] = 1;
+  writeLe16(output + 8, receipt.manifestLength);
+  writeLe16(output + 10, receipt.signatureLength);
+  memcpy(output + 12, receipt.manifest, receipt.manifestLength);
+  memcpy(output + 12 + kManifestMaxBytes, receipt.signature,
+         receipt.signatureLength);
+  writeLe32(output + length - 4, crc32(output, length - 4));
+  return true;
+}
+
+inline Result decodePendingUpdateReceipt(const uint8_t* encoded, size_t length,
+                                         PendingUpdateReceipt& output) {
+  memset(&output, 0, sizeof(output));
+  if (encoded == nullptr || length != kPendingReceiptBytes ||
+      encoded[0] != 'B' || encoded[1] != 'P' || encoded[2] != 'U' ||
+      encoded[3] != 'R' || encoded[4] != 1 || encoded[5] != 0 ||
+      encoded[6] != 0 || encoded[7] != 0 ||
+      readLe32(encoded + length - 4) != crc32(encoded, length - 4)) {
+    return Result::STORAGE_CORRUPT;
+  }
+  const uint16_t manifestLength = readLe16(encoded + 8);
+  const uint16_t signatureLength = readLe16(encoded + 10);
+  if (manifestLength == 0 || manifestLength > sizeof(output.manifest) ||
+      signatureLength == 0 || signatureLength > sizeof(output.signature)) {
+    return Result::STORAGE_CORRUPT;
+  }
+  for (size_t i = manifestLength; i < kManifestMaxBytes; ++i) {
+    if (encoded[12 + i] != 0) return Result::STORAGE_CORRUPT;
+  }
+  const size_t signatureOffset = 12 + kManifestMaxBytes;
+  for (size_t i = signatureLength; i < kPendingSignatureMaxBytes; ++i) {
+    if (encoded[signatureOffset + i] != 0) return Result::STORAGE_CORRUPT;
+  }
+  memcpy(output.manifest, encoded + 12, manifestLength);
+  memcpy(output.signature, encoded + signatureOffset, signatureLength);
+  output.manifestLength = manifestLength;
+  output.signatureLength = signatureLength;
+  return Result::OK;
 }
 
 struct SequenceSlot {

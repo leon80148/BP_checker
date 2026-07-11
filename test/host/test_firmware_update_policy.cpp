@@ -485,11 +485,66 @@ static void testPendingBootHealthConfirmation() {
            "authorization bound to an older sequence cannot be reused");
 }
 
+static void testPendingReceiptRoundTripAndCorruption() {
+  const std::string wire = manifest(13, 9, 123456);
+  const uint8_t signature[] = {0x30, 0x01, 0x7f};
+  PendingUpdateReceipt receipt{};
+  CHECK_EQ(code(makePendingUpdateReceipt(
+             reinterpret_cast<const uint8_t*>(wire.data()), wire.size(),
+             signature, sizeof(signature), receipt)),
+           code(Result::OK), "authorized manifest and signature form a receipt");
+  std::array<uint8_t, kPendingReceiptBytes> encoded{};
+  CHECK_TRUE(encodePendingUpdateReceipt(receipt, encoded.data(), encoded.size()),
+             "pending receipt has one byte-defined storage image");
+  PendingUpdateReceipt decoded{};
+  CHECK_EQ(code(decodePendingUpdateReceipt(
+             encoded.data(), encoded.size(), decoded)), code(Result::OK),
+           "pending receipt survives reboot decoding");
+  CHECK_EQ(decoded.manifestLength, wire.size(),
+           "receipt retains canonical manifest length");
+  CHECK_TRUE(memcmp(decoded.manifest, wire.data(), wire.size()) == 0,
+             "receipt retains exact signed manifest bytes");
+  CHECK_EQ(decoded.signatureLength, sizeof(signature),
+           "receipt retains detached signature length");
+  CHECK_TRUE(memcmp(decoded.signature, signature, sizeof(signature)) == 0,
+             "receipt retains exact detached signature bytes");
+
+  VerifyFixture verifierFixture{true, wire};
+  SignatureVerifier verifier{&verifierFixture, verifySignature, true};
+  AuthorizedManifest reauthorized{};
+  CHECK_EQ(code(authorizeManifest(
+             reinterpret_cast<const char*>(decoded.manifest),
+             decoded.manifestLength, decoded.signature,
+             decoded.signatureLength, "esp32:esp32:esp32s3", 9,
+             verifier, reauthorized)), code(Result::OK),
+           "pending image is re-authorized from signed bytes after reboot");
+
+  for (size_t offset = 0; offset < encoded.size(); ++offset) {
+    std::array<uint8_t, kPendingReceiptBytes> corrupt = encoded;
+    corrupt[offset] ^= 0x01U;
+    PendingUpdateReceipt rejected{};
+    CHECK_EQ(code(decodePendingUpdateReceipt(
+               corrupt.data(), corrupt.size(), rejected)),
+             code(Result::STORAGE_CORRUPT),
+             "every pending receipt byte is checksum protected");
+  }
+  PendingUpdateReceipt rejected{};
+  CHECK_EQ(code(decodePendingUpdateReceipt(
+             encoded.data(), encoded.size() - 1, rejected)),
+           code(Result::STORAGE_CORRUPT),
+           "truncated pending receipt fails closed");
+  CHECK_EQ(code(makePendingUpdateReceipt(nullptr, wire.size(), signature,
+                                         sizeof(signature), rejected)),
+           code(Result::INVALID_ARGUMENT),
+           "missing signed manifest cannot form pending receipt");
+}
+
 int main() {
   testCanonicalManifest();
   testAuthorizationFailsClosed();
   testBoundedArtifactStream();
   testCrashConsistentMonotonicSequence();
   testPendingBootHealthConfirmation();
+  testPendingReceiptRoundTripAndCorruption();
   return testReport();
 }
