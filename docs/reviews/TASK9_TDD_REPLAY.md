@@ -191,3 +191,20 @@ bytes globals, and artifact SHA-256
 
 No software-only result claims a successful signed installation, rollback
 drill, or HBP-9030 acceptance; those require retained device evidence.
+
+## Release Candidate and Evidence Validators
+
+The release contract initially exited 1 because `scripts/package_release.sh`
+did not exist. After the scripts were introduced, a new trust-anchor binding
+probe exited 1 because the SBOM lacked `trust_anchor_sha256`. The first real
+P-256 anchored compile also remained RED: quote escaping in the Arduino build
+property produced `stray '\\'` and `missing terminating " character` errors.
+
+At `041e157`, the public DER hex is passed as one preprocessor token and
+stringified in C++. The clean anchored gate reports 1,157,192 bytes (88%),
+73,540 bytes globals, and a 1,157,344-byte artifact with SHA-256
+`fffecc03f5bdbd0ad3692559b656295988b354dd0c63c557088a8c0740b5f20b`.
+The candidate manifest/SBOM record the exact anchor hash. A temporary P-256
+fixture key exercised the external signer; OpenSSL returned `Verified OK` and
+all bundle checksums passed. The private fixture key was removed from `/tmp`
+and never entered source, build output, or command output.
