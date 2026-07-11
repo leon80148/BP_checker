@@ -268,8 +268,32 @@ sign_candidate() {
     cp "$source_bundle/$file" "$signing_dir/$file"
   done
   bundle=$signing_dir
+  if [[ "$(sha256_file "$bundle/checksums.sha256")" != "$approval_digest" ]] ||
+     ! (
+       cd "$bundle"
+       if command -v sha256sum >/dev/null; then
+         sha256sum -c checksums.sha256
+       else
+         shasum -a 256 -c checksums.sha256
+       fi
+     ) >/dev/null 2>&1; then
+    echo "private signing snapshot did not match approved candidate" >&2
+    exit 1
+  fi
 
   "$BP_RELEASE_SIGN_COMMAND" "$bundle/manifest.txt" "$bundle/manifest.sig.der"
+  if [[ "$(sha256_file "$bundle/checksums.sha256")" != "$approval_digest" ]] ||
+     ! (
+       cd "$bundle"
+       if command -v sha256sum >/dev/null; then
+         sha256sum -c checksums.sha256
+       else
+         shasum -a 256 -c checksums.sha256
+       fi
+     ) >/dev/null 2>&1; then
+    echo "approved snapshot changed while signer was running" >&2
+    exit 1
+  fi
   local signature_size
   signature_size=$(wc -c < "$bundle/manifest.sig.der" | tr -d ' ')
   (( signature_size > 0 && signature_size <= 80 )) || {

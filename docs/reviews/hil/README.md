@@ -23,6 +23,7 @@ Validate retained evidence with:
 ```bash
 BP_HIL_BOARD_ID=... BP_HIL_MONITOR_ID=... \
 BP_HIL_LOG_DIR=/secure/evidence/run-... BP_HIL_SOAK_HOURS=24 \
+BP_HIL_RUN_ID=... BP_HIL_RELEASE_BUNDLE=build/release/<signed-bundle> \
 BP_HIL_EVIDENCE_PUBLIC_KEY=/secure/approved-harness-public.pem \
 bash scripts/run_hil_acceptance.sh
 ```
@@ -41,3 +42,10 @@ The HIL harness signing key must be separated from the person preparing JSON
 summaries. Review its public DER SHA-256 into
 `config/evidence-trust-anchors.json`; an empty or mismatched anchor fails. This
 attestation does not replace independent review of raw logs and hardware IDs.
+The canonical manifest also binds a unique run ID, current source SHA, signed
+firmware SHA-256, release sequence, both hardware IDs, and every summary/raw-log
+index hash, so evidence from an older firmware cannot be replayed.
+
+The soak summary must include typed duration, heap start/end/minimum and slope,
+minimum stack watermark, reset reasons and unexpected-reset count, measurement
+throughput, data-loss/reconnect counters, plus record order/checksum results.

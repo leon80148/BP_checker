@@ -9,7 +9,10 @@ cd "$ROOT"
 : "${BP_HIL_LOG_DIR:?BP_HIL_LOG_DIR is required}"
 : "${BP_HIL_SOAK_HOURS:?BP_HIL_SOAK_HOURS is required and must equal 24}"
 : "${BP_HIL_EVIDENCE_PUBLIC_KEY:?BP_HIL_EVIDENCE_PUBLIC_KEY is required}"
+: "${BP_HIL_RELEASE_BUNDLE:?BP_HIL_RELEASE_BUNDLE is required}"
+: "${BP_HIL_RUN_ID:?BP_HIL_RUN_ID is required}"
 [[ -s "$BP_HIL_EVIDENCE_PUBLIC_KEY" ]] || { echo "HIL evidence public key is unavailable" >&2; exit 2; }
+[[ "$BP_HIL_RUN_ID" =~ ^[A-Za-z0-9._:-]{4,80}$ ]] || { echo "invalid HIL run ID" >&2; exit 2; }
 [[ "$BP_HIL_SOAK_HOURS" == "24" ]] || {
   echo "a complete 24-hour soak is required" >&2
   exit 1
@@ -20,6 +23,22 @@ cd "$ROOT"
 [[ "$BP_HIL_MONITOR_ID" =~ ^[A-Za-z0-9._:-]{4,64}$ ]] || {
   echo "invalid monitor identifier" >&2; exit 2;
 }
+[[ -d "$BP_HIL_RELEASE_BUNDLE" ]] || { echo "signed HIL release bundle is missing" >&2; exit 2; }
+release_json="$BP_HIL_RELEASE_BUNDLE/release.json"
+firmware="$BP_HIL_RELEASE_BUNDLE/firmware.bin"
+[[ -s "$release_json" && -s "$firmware" ]] || { echo "signed HIL release bundle is incomplete" >&2; exit 2; }
+source_sha=$(jq -r '.source_sha' "$release_json")
+firmware_sha256=$(jq -r '.artifact_sha256' "$release_json")
+release_sequence=$(jq -r '.sequence' "$release_json")
+[[ "$source_sha" == "$(git rev-parse --verify 'HEAD^{commit}')" ]] || { echo "HIL release source SHA is not current" >&2; exit 1; }
+[[ "$firmware_sha256" =~ ^[0-9a-f]{64}$ && "$release_sequence" =~ ^(0|[1-9][0-9]*)$ ]] || { echo "HIL release identity is malformed" >&2; exit 1; }
+if command -v sha256sum >/dev/null; then
+  actual_firmware_sha=$(sha256sum "$firmware" | awk '{print $1}')
+else
+  actual_firmware_sha=$(shasum -a 256 "$firmware" | awk '{print $1}')
+fi
+[[ "$actual_firmware_sha" == "$firmware_sha256" ]] || { echo "HIL firmware hash mismatches signed bundle" >&2; exit 1; }
+jq -e '.status == "signed"' "$release_json" >/dev/null
 
 for file in \
   corpus-summary.json transport-faults.json network-security.json \
@@ -58,10 +77,22 @@ jq -e '.schema == "bp-hil-update-v1" and .signed_update_passed == true and
   "$BP_HIL_LOG_DIR/signed-update.json" >/dev/null
 jq -e '.schema == "bp-hil-rollback-v1" and .failed_health_rolled_back == true and
        .previous_image_booted == true' "$BP_HIL_LOG_DIR/rollback.json" >/dev/null
-jq -e '.schema == "bp-hil-soak-v1" and .duration_hours >= 24 and
+jq -e '.schema == "bp-hil-soak-v1" and
+       (.duration_hours | type) == "number" and .duration_hours >= 24 and
        .watchdog_resets == 0 and .leak_trend == false and
        .stack_exhaustion == false and .record_order_valid == true and
-       .record_checksums_valid == true' "$BP_HIL_LOG_DIR/soak-summary.json" >/dev/null
+       .record_checksums_valid == true and
+       (.heap_start_bytes | type) == "number" and .heap_start_bytes > 0 and
+       (.heap_end_bytes | type) == "number" and .heap_end_bytes > 0 and
+       (.heap_min_bytes | type) == "number" and .heap_min_bytes > 0 and
+       (.heap_slope_bytes_per_hour | type) == "number" and
+       (.stack_min_watermark_bytes | type) == "number" and .stack_min_watermark_bytes > 0 and
+       (.reset_reasons | type) == "array" and (.reset_reasons | length) > 0 and
+       .unexpected_reset_count == 0 and
+       (.throughput_measurements | type) == "number" and .throughput_measurements > 0 and
+       (.data_loss_count | type) == "number" and .data_loss_count >= 0 and
+       (.reconnect_count | type) == "number" and .reconnect_count >= 1' \
+  "$BP_HIL_LOG_DIR/soak-summary.json" >/dev/null
 jq -e '.schema == "bp-hil-approval-v1" and .approved == true and
        (.reviewer | length) > 0 and (.approved_at | length) > 0' \
   "$BP_HIL_LOG_DIR/operator-approval.json" >/dev/null
@@ -84,6 +115,8 @@ sha256_stream() {
 expected_manifest=$(mktemp)
 {
   printf '%s\n' 'schema=bp-hil-evidence-v1' \
+    "run_id=$BP_HIL_RUN_ID" "source_sha=$source_sha" \
+    "firmware_sha256=$firmware_sha256" "release_sequence=$release_sequence" \
     "board_id=$BP_HIL_BOARD_ID" "monitor_id=$BP_HIL_MONITOR_ID" \
     "soak_hours=$BP_HIL_SOAK_HOURS"
   for file in corpus-summary.json transport-faults.json network-security.json \

@@ -64,7 +64,7 @@ for token in BP_BROWSER_EXECUTABLE BP_BROWSER_VERSION BP_BROWSER_EVIDENCE_DIR BP
   }
 done
 
-for token in BP_HIL_BOARD_ID BP_HIL_MONITOR_ID BP_HIL_LOG_DIR BP_HIL_SOAK_HOURS BP_HIL_EVIDENCE_PUBLIC_KEY 24 signed-update rollback soak-summary.json raw-logs.sha256 evidence-manifest.txt evidence-attestation.sig.der bp-hil-transport-v1 bp-hil-network-v1 old_credentials_rejected ap_shutdown_passed; do
+for token in BP_HIL_BOARD_ID BP_HIL_MONITOR_ID BP_HIL_LOG_DIR BP_HIL_SOAK_HOURS BP_HIL_EVIDENCE_PUBLIC_KEY BP_HIL_RELEASE_BUNDLE BP_HIL_RUN_ID source_sha firmware_sha256 release_sequence 24 signed-update rollback soak-summary.json raw-logs.sha256 evidence-manifest.txt evidence-attestation.sig.der bp-hil-transport-v1 bp-hil-network-v1 old_credentials_rejected ap_shutdown_passed heap_min_bytes stack_min_watermark_bytes reset_reasons throughput_measurements data_loss_count reconnect_count; do
   grep -Fq -- "$token" scripts/run_hil_acceptance.sh || {
     echo "missing HIL evidence contract: $token" >&2
     exit 1
