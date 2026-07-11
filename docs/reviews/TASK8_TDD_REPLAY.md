@@ -6,6 +6,7 @@
 - Spec-review fix: `595ea60bb93549062de377604f05bd3abf8ec506`
 - Policy-version dashboard fix: `cf30577b83fc02a77150effbf2c80aa5db59b16e`
 - Polling-liveness fix: `a58ae2e709ca9ab5e40f47529f1f510ac466e7ae`
+- Back-forward-cache restore fix: `a5fd37ea10565722f4f11538854283dc5cdce5e4`
 - Toolchain: Arduino CLI 1.4.1, ESP32 core 3.3.7, ArduinoJson 7.4.2,
   host C++17 compiler; run date 2026-07-11.
 
@@ -129,6 +130,20 @@ marking the API disconnected between normal three-second polls. Response
 silence now uses the fixed application deadline; record age alone uses the
 active policy stale interval.
 
+### Back-forward-cache restoration
+
+After adding the persisted-restore contract over `72dd74c`,
+`bash scripts/check_ui_markup.sh` exited 1 with:
+
+```text
+missing bounded dashboard polling/watchdog contract: window.addEventListener('pageshow',(event)=>{if(event.persisted)location.reload();})
+```
+
+This demonstrates the one-way lifecycle: `pagehide` stopped and cleaned all
+timers, but a dashboard restored from bfcache had no path to restart. The final
+handler reloads only when `event.persisted` is true, so the ordinary initial
+`pageshow` cannot create a reload loop.
+
 ## GREEN commands and results at `595ea60`
 
 ```bash
@@ -171,6 +186,12 @@ updates, and bounded timer cleanup on `pagehide`. `bash scripts/run_host_tests.s
 also passed every executable, including policy 149, record manager 1,199, Web
 access 276, and request gate 2,201 checks. The pinned firmware/full repository
 gate was intentionally deferred to the owning final review.
+
+At `a5fd37e`, both `bash scripts/check_ui_markup.sh` and every executable in
+`bash scripts/run_host_tests.sh` passed, including policy 149, record manager
+1,199, Web access 276, and request gate 2,201 checks. The change is limited to
+the persisted-only `pageshow` reload and its executable static contract; the
+full firmware gate remains deferred to the owning final review.
 
 ## Independent RED replay against the base production tree
 
@@ -253,3 +274,20 @@ bash scripts/check_ui_markup.sh
 Observed on 2026-07-11: the UI/static command exited 1 with the exact missing
 `AbortController` signature above. Remove the disposable worktree with
 `git worktree remove --force /tmp/bp-task8-poll-watchdog-red`.
+
+The bfcache restoration contract can be replayed against its direct pre-fix
+revision while retaining the stopped-timer production behavior:
+
+```bash
+git worktree add /tmp/bp-task8-bfcache-red \
+  72dd74c67ccdb0bfcdce5a0c6f9624b4bbaaf66e
+git -C /tmp/bp-task8-bfcache-red checkout \
+  a5fd37ea10565722f4f11538854283dc5cdce5e4 -- \
+  scripts/check_ui_markup.sh
+cd /tmp/bp-task8-bfcache-red
+bash scripts/check_ui_markup.sh
+```
+
+Observed on 2026-07-11: the command exited 1 with the exact missing persisted
+`pageshow` handler signature above. Remove the disposable worktree with
+`git worktree remove --force /tmp/bp-task8-bfcache-red`.
