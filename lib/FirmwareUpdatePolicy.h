@@ -570,6 +570,13 @@ private:
   uint8_t _activeSlot = 0;
   bool _ready = false;
 
+  void lock() {
+    _sequence = 0;
+    _generation = 0;
+    _activeSlot = 0;
+    _ready = false;
+  }
+
   Result commit(uint8_t slotIndex, const SequenceSlot& candidate) {
     uint8_t encoded[kSequenceSlotBytes] = {};
     encodeSequenceSlot(candidate, encoded);
@@ -579,6 +586,7 @@ private:
     bool present = false;
     if (!_storage.read(_storage.context, slotIndex, reconciled,
                        sizeof(reconciled), present)) {
+      lock();
       return Result::STORAGE_FAILURE;
     }
     SequenceSlot decoded{};
@@ -586,6 +594,7 @@ private:
         decoded.generation != candidate.generation ||
         decoded.sequence != candidate.sequence) {
       (void)reported;
+      lock();
       return Result::STORAGE_FAILURE;
     }
     _activeSlot = slotIndex;

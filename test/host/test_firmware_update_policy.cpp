@@ -285,13 +285,16 @@ struct SlotStorage {
   enum class Failure { NONE, READ, WRITE_BEFORE, WRITE_AFTER } failure = Failure::NONE;
   size_t writes = 0;
   size_t unrelatedApplicationResetCount = 0;
+  bool failReadAfterNextWrite = false;
+  bool armedWriteApplied = false;
 };
 
 static bool slotRead(void* context, uint8_t slot, uint8_t* bytes,
                      size_t length, bool& present) {
   SlotStorage* storage = static_cast<SlotStorage*>(context);
   if (storage == nullptr || slot > 1 || length != kSequenceSlotBytes ||
-      storage->failure == SlotStorage::Failure::READ) {
+      storage->failure == SlotStorage::Failure::READ ||
+      storage->armedWriteApplied) {
     return false;
   }
   present = storage->present[slot];
@@ -306,6 +309,7 @@ static bool slotWrite(void* context, uint8_t slot, const uint8_t* bytes,
   if (storage->failure == SlotStorage::Failure::WRITE_BEFORE) return false;
   memcpy(storage->slots[slot].data(), bytes, length);
   storage->present[slot] = true;
+  if (storage->failReadAfterNextWrite) storage->armedWriteApplied = true;
   return storage->failure != SlotStorage::Failure::WRITE_AFTER;
 }
 
@@ -368,6 +372,25 @@ static void testCrashConsistentMonotonicSequence() {
   CHECK_EQ(code(afterReboot.load()), code(Result::OK),
            "new slot survives cut after apply");
   CHECK_EQ(afterReboot.sequence(), 9ULL, "cut after apply retains new sequence");
+
+  SlotStorage ambiguous = storage;
+  ambiguous.failReadAfterNextWrite = true;
+  MonotonicSequenceStore ambiguousStore(sequenceStorage(ambiguous));
+  CHECK_EQ(code(ambiguousStore.load()), code(Result::OK),
+           "ambiguous reconciliation fixture loads old state");
+  CHECK_EQ(code(ambiguousStore.advance(9)), code(Result::STORAGE_FAILURE),
+           "applied write with unreadable reconciliation is ambiguous");
+  CHECK_TRUE(!ambiguousStore.ready(),
+             "ambiguous reconciliation locks stale in-memory sequence");
+  CHECK_EQ(code(ambiguousStore.advance(8)), code(Result::STORAGE_UNINITIALIZED),
+           "locked store cannot overwrite a possibly newer durable sequence");
+  ambiguous.armedWriteApplied = false;
+  ambiguous.failReadAfterNextWrite = false;
+  MonotonicSequenceStore reconciledStore(sequenceStorage(ambiguous));
+  CHECK_EQ(code(reconciledStore.load()), code(Result::OK),
+           "explicit reload reconciles the ambiguous durable state");
+  CHECK_EQ(reconciledStore.sequence(), 9ULL,
+           "reload observes the already-applied higher sequence");
 
   SlotStorage corrupt = storage;
   corrupt.slots[0][0] ^= 0xffU;
