@@ -8,6 +8,7 @@
 
 #include "BoundedHttpTransaction.h"
 #include "BoundedSocketRuntime.h"
+#include "BoundedStreamConsumer.h"
 #include "BoundedWebInput.h"
 #include "WebRequestGate.h"
 
@@ -41,6 +42,8 @@ public:
   void configureAccess(WebRequestGate* gate,
                        BoundedWebSnapshotProvider snapshotProvider,
                        void* snapshotContext);
+  bool configureStreamConsumer(
+    const bp_http::StreamConsumerCallbacks& callbacks);
 
   void handleClient() override;
   void close() override;
@@ -69,6 +72,8 @@ private:
   bp_http::BoundedHttpTransaction _transaction;
   BoundedIngressBuffer _ingress;
   BoundedFormValidator _formValidator;
+  bp_http::BoundedStreamConsumer _streamConsumer;
+  bp_http::StreamConsumerCallbacks _streamCallbacks{};
   BoundedWebRuntimeSnapshot _runtimeSnapshot{};
 
   bool _clientActive = false;
@@ -92,6 +97,7 @@ private:
   void acceptClient(uint32_t nowMs);
   void processIngress(uint32_t nowMs);
   void processPolicy();
+  bool processStreamChunk(uint32_t nowMs);
   void dispatchReadyRequest();
   void pumpResponse(uint32_t nowMs);
   void finishActiveClient(bool runDeferredAction);

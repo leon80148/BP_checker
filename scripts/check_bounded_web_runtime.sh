@@ -31,6 +31,22 @@ grep -Fq 'catch (const std::bad_alloc&)' "$source"
 grep -Fq '_transaction.rejectCapture(' "$source"
 grep -Fq 'mandatoryResponseHeadersAreExact()' "$source"
 grep -Fq '_transaction.capturedResponseIsValidHttp1()' "$source"
+grep -Fq 'BoundedStreamConsumer _streamConsumer' "$header"
+grep -Fq 'configureStreamConsumer(' "$header"
+grep -Fq '_streamConsumer.start(' "$source"
+grep -Fq '_streamConsumer.write(' "$source"
+grep -Fq '_streamConsumer.finish()' "$source"
+grep -Fq '_streamConsumer.cancel()' "$source"
+grep -Fq '_transaction.rejectBody(503' "$source"
+
+gate_line=$(grep -nF '_gate->evaluate(' "$source" | head -1 | cut -d: -f1)
+stream_begin_line=$(grep -nF '_streamConsumer.start(' "$source" | head -1 | cut -d: -f1)
+policy_line=$(grep -nF '_transaction.acceptPolicy(' "$source" | head -1 | cut -d: -f1)
+if [[ -z "$gate_line" || -z "$policy_line" || -z "$stream_begin_line" || \
+      ! "$gate_line" -lt "$policy_line" || ! "$policy_line" -lt "$stream_begin_line" ]]; then
+  echo "stream sink must begin only after gate and request policy acceptance" >&2
+  exit 1
+fi
 
 if grep -Eq '_parseRequest|_currentClient\.(available|connected|read)|readString|readBytes|delay\(|yield\(' "$source"; then
   echo "bounded web runtime uses a blocking/stock parser primitive" >&2

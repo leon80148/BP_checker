@@ -93,6 +93,11 @@ public:
     return true;
   }
 
+  bool rejectBody(int status, uint32_t nowMs) {
+    if (_state != TransactionState::READING_BODY) return false;
+    return queueError(status == 405 ? 500 : status, nowMs);
+  }
+
   bool rejectPolicy(int status, uint32_t nowMs) {
     if (_state != TransactionState::WAIT_POLICY) return false;
     if (handoffDeadlineElapsed(nowMs)) return queueError(408, nowMs);

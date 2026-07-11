@@ -842,6 +842,34 @@ static void testStreamInvalidDrainWipeDestructorAndNoAllocation() {
              "transaction destruction securely clears stream bytes");
 }
 
+static void testStreamConsumerCanRejectBodyWithBoundedResponse() {
+  BoundedHttpTransaction transaction;
+  transaction.begin(9000);
+  static const char headers[] =
+    "POST /stream HTTP/1.1\r\nHost: 10.0.0.5\r\n"
+    "Content-Type: application/octet-stream\r\n"
+    "Content-Length: 4\r\n\r\n";
+  (void)feedUntilBoundary(transaction, headers, 9000);
+  CHECK_TRUE(transaction.acceptPolicy(BodyMode::STREAM, 4, 9001),
+             "consumer rejection fixture accepts stream policy");
+  const uint8_t secret[] = {0xde, 0xad, 0xbe, 0xef};
+  (void)transaction.consume(secret, sizeof(secret), 9002);
+  CHECK_TRUE(transaction.rejectBody(503, 9003),
+             "stream consumer failure queues a bounded error response");
+  CHECK_EQ(transaction.queuedStatus(), 503,
+           "consumer failure is Service Unavailable");
+  CHECK_EQ(transaction.pendingStreamChunk().length, 0UL,
+           "consumer rejection wipes the pending stream chunk");
+  CHECK_TRUE(!objectContainsBytes(&transaction, sizeof(transaction),
+                                  secret, sizeof(secret)),
+             "consumer rejection wipes binary canary bytes");
+  const std::string response = drain(transaction);
+  CHECK_TRUE(response.find("HTTP/1.1 503 Service Unavailable\r\n") == 0,
+             "consumer rejection uses the bounded HTTP envelope");
+  CHECK_TRUE(!transaction.rejectBody(503, 9004),
+             "body rejection is invalid after response begins");
+}
+
 int main() {
   testDeniedPolicyNeverConsumesBody();
   testAllowedBodyAndCapturedResponseLifecycle();
@@ -852,5 +880,6 @@ int main() {
   testStreamPolicyMediaTypeAndHardCap();
   testStreamAbsoluteDeadlineWrapAndSmallFormDeadline();
   testStreamInvalidDrainWipeDestructorAndNoAllocation();
+  testStreamConsumerCanRejectBodyWithBoundedResponse();
   return testReport();
 }

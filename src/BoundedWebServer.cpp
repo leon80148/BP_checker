@@ -110,6 +110,17 @@ void BoundedWebServer::configureAccess(
   _snapshotContext = snapshotContext;
 }
 
+bool BoundedWebServer::configureStreamConsumer(
+    const bp_http::StreamConsumerCallbacks& callbacks) {
+  if (_clientActive || _streamConsumer.active() || callbacks.begin == nullptr ||
+      callbacks.write == nullptr || callbacks.finish == nullptr ||
+      callbacks.abort == nullptr) {
+    return false;
+  }
+  _streamCallbacks = callbacks;
+  return true;
+}
+
 void BoundedWebServer::acceptClient(uint32_t nowMs) {
   _currentClient = _server.accept();
   if (!_currentClient) return;
@@ -120,6 +131,7 @@ void BoundedWebServer::acceptClient(uint32_t nowMs) {
   _remoteAddress = static_cast<uint32_t>(_currentClient.remoteIP());
   _currentClient.setNoDelay(true);
   _transaction.begin(nowMs);
+  _streamConsumer.reset();
   _ingress.clear();
   _formValidator.clear();
   _currentRole = AccessRole::NONE;
@@ -137,9 +149,15 @@ void BoundedWebServer::processIngress(uint32_t nowMs) {
     return;
   }
 
+  if (_transaction.pendingStreamChunk().length != 0) {
+    (void)processStreamChunk(nowMs);
+    return;
+  }
+
   if (_ingress.length() == 0) {
     const int socket = _currentClient.fd();
     if (socket < 0) {
+      _streamConsumer.cancel();
       _transaction.abort();
       return;
     }
@@ -149,6 +167,7 @@ void BoundedWebServer::processIngress(uint32_t nowMs) {
       return;
     }
     if (received != IngressIoResult::PROGRESS) {
+      _streamConsumer.cancel();
       _transaction.abort();
       return;
     }
@@ -166,10 +185,51 @@ void BoundedWebServer::processIngress(uint32_t nowMs) {
     _transaction.abort();
   }
 
+  if (_transaction.pendingStreamChunk().length != 0) {
+    (void)processStreamChunk(nowMs);
+  } else if (_streamConsumer.active() &&
+             _transaction.state() !=
+               bp_http::TransactionState::READING_BODY) {
+    _streamConsumer.cancel();
+  }
+
   if (_transaction.state() == bp_http::TransactionState::SENDING_RESPONSE ||
       _transaction.state() == bp_http::TransactionState::ABORTED) {
     _ingress.clear();
   }
+}
+
+bool BoundedWebServer::processStreamChunk(uint32_t nowMs) {
+  const bp_http::RequestBodyChunk chunk = _transaction.pendingStreamChunk();
+  if (chunk.data == nullptr || chunk.length == 0 || !_streamConsumer.active()) {
+    if (_streamConsumer.active()) _streamConsumer.cancel();
+    if (_transaction.state() == bp_http::TransactionState::READING_BODY) {
+      (void)_transaction.rejectBody(503, nowMs);
+    }
+    _ingress.clear();
+    return false;
+  }
+  if (_streamConsumer.write(chunk.data, chunk.length) !=
+      bp_http::StreamConsumerResult::OK) {
+    (void)_transaction.rejectBody(503, nowMs);
+    _ingress.clear();
+    return false;
+  }
+  if (!_transaction.drainStreamChunk(nowMs)) {
+    _streamConsumer.cancel();
+    if (_transaction.state() == bp_http::TransactionState::READING_BODY) {
+      (void)_transaction.rejectBody(503, nowMs);
+    }
+    _ingress.clear();
+    return false;
+  }
+  if (_transaction.state() == bp_http::TransactionState::DISPATCH_READY &&
+      _streamConsumer.finish() != bp_http::StreamConsumerResult::OK) {
+    (void)_transaction.rejectDispatch(503, nowMs);
+    _ingress.clear();
+    return false;
+  }
+  return true;
 }
 
 bool BoundedWebServer::snapshotIsWellFormed() const {
@@ -275,6 +335,17 @@ void BoundedWebServer::processPolicy() {
   _currentRoute = decision.route;
   const bool accepted = _transaction.acceptPolicy(
     decision.bodyMode, decision.bodyCap, policyCompletedAt);
+  if (accepted && decision.bodyMode == bp_http::BodyMode::STREAM &&
+      _streamConsumer.start(_transaction.request().view().contentLength,
+                            _streamCallbacks) !=
+        bp_http::StreamConsumerResult::OK) {
+    (void)_transaction.rejectBody(503, policyCompletedAt);
+    _currentRole = AccessRole::NONE;
+    _currentRequestInterface = RequestInterface::UNKNOWN;
+    _currentRoute = nullptr;
+    _ingress.clear();
+    return;
+  }
   if (!accepted ||
       _transaction.state() == bp_http::TransactionState::DISPATCH_READY) {
     _ingress.clear();
@@ -407,6 +478,12 @@ void BoundedWebServer::dispatchReadyRequest() {
   if (_transaction.state() != bp_http::TransactionState::DISPATCH_READY) {
     return;
   }
+  if (_currentRoute != nullptr &&
+      _currentRoute->bodyKind == RouteBodyKind::STREAM &&
+      _streamConsumer.state() != bp_http::StreamConsumerState::COMPLETE) {
+    (void)_transaction.rejectDispatch(503, _socketRuntime.nowMs());
+    return;
+  }
   int dispatchFailureStatus = 0;
   bool captureStarted = false;
   try {
@@ -509,6 +586,7 @@ void BoundedWebServer::finishActiveClient(bool runDeferredAction) {
   _deferredContext = nullptr;
   _deferredFallbackPending = false;
 
+  _streamConsumer.reset();
   if (!_transaction.terminal()) _transaction.abort();
   _socketRuntime.cancelDrain();
   _ingress.clear();
@@ -535,6 +613,7 @@ void BoundedWebServer::handleClient() {
     try {
       acceptClient(nowMs);
     } catch (...) {
+      _streamConsumer.reset();
       _transaction.abort();
       _socketRuntime.cancelDrain();
       _ingress.clear();
@@ -573,6 +652,10 @@ void BoundedWebServer::handleClient() {
   }
 
   (void)_transaction.poll(nowMs);
+  if (_streamConsumer.active() &&
+      _transaction.state() != bp_http::TransactionState::READING_BODY) {
+    _streamConsumer.cancel();
+  }
   processIngress(nowMs);
   processPolicy();
   dispatchReadyRequest();
