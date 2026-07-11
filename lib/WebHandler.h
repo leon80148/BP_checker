@@ -1151,6 +1151,8 @@ private:
 
     html += "<script>let bpRevision='";
     appendUInt64(html, recordManager->getRevision());
+    html += "';let bpPolicyVersion='";
+    html += activePolicy().policyVersion;
     html += F(
       "';let bpLastPollSuccess='尚無成功輪詢';"
       "async function bpRefresh(){"
@@ -1159,8 +1161,9 @@ private:
         "const r=await fetch('/api/latest',{cache:'no-store'});"
         "if(!r.ok)throw new Error('poll-failure');"
         "const d=await r.json();"
-        "bpLastPollSuccess=new Date().toLocaleTimeString('zh-TW',{hour12:false});"
+        "if(String(d.policy_version)!==bpPolicyVersion){location.reload();return;}"
         "if(String(d.revision)!==bpRevision){location.reload();return;}"
+        "bpLastPollSuccess=new Date().toLocaleTimeString('zh-TW',{hour12:false});"
         "const t=document.getElementById('conn-transport');if(t)t.textContent=d.transport_name;"
         "const s=document.getElementById('conn-status');if(s)s.textContent=d.transport_status;"
         "const ip=document.getElementById('conn-ip');if(ip)ip.textContent=d.wifi_ip||'未連線';"

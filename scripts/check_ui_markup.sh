@@ -32,6 +32,40 @@ do
 done
 
 for token in \
+  "html += \"';let bpPolicyVersion='\";" \
+  "if(String(d.policy_version)!==bpPolicyVersion){location.reload();return;}"
+do
+  grep -Fq -- "$token" "$FILE" || {
+    echo "missing policy-version dashboard reload contract: $token"
+    exit 1
+  }
+done
+
+policy_snapshot_line=$(grep -nF "html += \"';let bpPolicyVersion='\";" "$FILE" \
+  | head -1 | cut -d: -f1)
+policy_snapshot_value_line=$(grep -nF \
+  "html += activePolicy().policyVersion;" "$FILE" | tail -1 | cut -d: -f1)
+if [[ -z "$policy_snapshot_line" || -z "$policy_snapshot_value_line" || \
+      ! "$policy_snapshot_value_line" -eq $((policy_snapshot_line + 1)) ]]; then
+  echo "dashboard policy snapshot must use the active policy version"
+  exit 1
+fi
+
+latest_json_line=$(grep -nF "const d=await r.json();" "$FILE" \
+  | head -1 | cut -d: -f1)
+policy_reload_line=$(grep -nF \
+  "if(String(d.policy_version)!==bpPolicyVersion){location.reload();return;}" \
+  "$FILE" | head -1 | cut -d: -f1)
+poll_success_line=$(grep -nF "bpLastPollSuccess=new Date()" "$FILE" \
+  | head -1 | cut -d: -f1)
+if [[ -z "$latest_json_line" || -z "$policy_reload_line" || \
+      -z "$poll_success_line" || ! "$latest_json_line" -lt "$policy_reload_line" || \
+      ! "$policy_reload_line" -lt "$poll_success_line" ]]; then
+  echo "policy version must trigger reload before dashboard state updates"
+  exit 1
+fi
+
+for token in \
   "MonotonicMillis64 uptimeClock" \
   "uptimeClock.observe(static_cast<uint32_t>(millis()))" \
   "MeasurementPolicyStore measurementPolicyStore" \
