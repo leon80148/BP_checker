@@ -199,10 +199,14 @@ bool FirmwareUpdateRuntime::verifySignature(
   }
   mbedtls_pk_context key;
   mbedtls_pk_init(&key);
-  const bool parsed =
+  bool parsed =
     mbedtls_pk_parse_public_key(&key, anchor, anchorLength) == 0 &&
     mbedtls_pk_can_do(&key, MBEDTLS_PK_ECDSA) &&
     mbedtls_pk_get_bitlen(&key) == 256;
+  const mbedtls_ecp_keypair* ecKey = parsed ? mbedtls_pk_ec(key) : nullptr;
+  parsed = parsed && ecKey != nullptr &&
+           mbedtls_ecp_keypair_get_group_id(ecKey) ==
+             MBEDTLS_ECP_DP_SECP256R1;
   const bool verified = parsed &&
     mbedtls_pk_verify(&key, MBEDTLS_MD_SHA256, digest, sizeof(digest),
                       signature, signatureLength) == 0;

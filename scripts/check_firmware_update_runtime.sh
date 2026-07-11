@@ -21,6 +21,7 @@ for token in \
   'mbedtls_pk_parse_public_key' \
   'mbedtls_pk_verify' \
   'MBEDTLS_MD_SHA256' \
+  'MBEDTLS_ECP_DP_SECP256R1' \
   'esp_ota_get_next_update_partition' \
   'esp_ota_begin' 'esp_ota_write' 'esp_ota_end' 'esp_ota_abort' \
   'esp_ota_set_boot_partition' \
