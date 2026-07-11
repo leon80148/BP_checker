@@ -111,13 +111,6 @@ bool FirmwareUpdateRuntime::writeSlot(
 
 bool FirmwareUpdateRuntime::begin(bool allowFirstInitialization) {
   if (_ready || _preferences == nullptr) return false;
-  _lastResult = _sequenceStore.load();
-  if (_lastResult == bp_update::Result::STORAGE_UNINITIALIZED &&
-      allowFirstInitialization) {
-    _lastResult = _sequenceStore.initialize(0);
-  }
-  if (_lastResult != bp_update::Result::OK) return false;
-
   const esp_partition_t* running = esp_ota_get_running_partition();
   esp_ota_img_states_t imageState = ESP_OTA_IMG_UNDEFINED;
   if (running == nullptr ||
@@ -126,6 +119,13 @@ bool FirmwareUpdateRuntime::begin(bool allowFirstInitialization) {
     return false;
   }
   _pendingVerify = imageState == ESP_OTA_IMG_PENDING_VERIFY;
+  _lastResult = _sequenceStore.load();
+  if (_lastResult == bp_update::Result::STORAGE_UNINITIALIZED &&
+      allowFirstInitialization) {
+    _lastResult = _sequenceStore.initialize(0);
+  }
+  if (_lastResult != bp_update::Result::OK) return false;
+
   bool receiptPresent = false;
   _lastResult = loadPendingReceipt(receiptPresent);
   if (_lastResult != bp_update::Result::OK) return false;

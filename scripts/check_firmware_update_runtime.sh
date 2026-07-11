@@ -64,6 +64,13 @@ if [[ -z "$clear_line" || -z "$valid_line" || ! "$clear_line" -lt "$valid_line" 
   echo "pending receipt must clear durably before mark-valid" >&2
   exit 1
 fi
+pending_state_line=$(grep -nF '_pendingVerify = imageState == ESP_OTA_IMG_PENDING_VERIFY;' "$source" | head -1 | cut -d: -f1)
+sequence_load_line=$(grep -nF '_sequenceStore.load()' "$source" | head -1 | cut -d: -f1)
+if [[ -z "$pending_state_line" || -z "$sequence_load_line" || \
+      ! "$pending_state_line" -lt "$sequence_load_line" ]]; then
+  echo "pending OTA state must latch before fallible sequence storage" >&2
+  exit 1
+fi
 
 if rg -n 'PRIVATE KEY|BEGIN EC PRIVATE|BEGIN PRIVATE' "$anchor" "$source" "$header"; then
   echo "private signing key material is forbidden" >&2
