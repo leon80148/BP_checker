@@ -1272,6 +1272,7 @@ private:
       "}"
       "bpWatchdogTimer=setInterval(bpWatchdog,1000);"
       "window.addEventListener('pagehide',bpStopTimers,{once:true});"
+      "window.addEventListener('pageshow',(event)=>{if(event.persisted)location.reload();});"
       "bpRefresh();"
       "</script>"
     );

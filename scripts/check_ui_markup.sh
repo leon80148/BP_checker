@@ -52,6 +52,7 @@ for token in \
   "bpWatchdogTimer=setInterval(bpWatchdog,1000)" \
   "clearInterval(bpWatchdogTimer)" \
   "window.addEventListener('pagehide',bpStopTimers,{once:true})" \
+  "window.addEventListener('pageshow',(event)=>{if(event.persisted)location.reload();})" \
   "html += activePolicy().staleAfterMs;" \
   "lastSuccessfulReceiveAgeMs(nowMs, initialReceiveAgeMs)" \
   "responseAge>=bpRequestDeadlineMs" \
